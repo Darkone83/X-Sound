@@ -1,7 +1,6 @@
 <p align="center">
-  <img src="X-Sound.png" width="320"/>
-  <br><br>
-  <img src="DC logo.png" width="180"/>
+  <img src="images/X-Sound.png" width="180"/>
+  <img src="images/DC logo.png" width="180"/>
 </p>
 
 # X-Sound (Original Xbox Audio Helper)
