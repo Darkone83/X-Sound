@@ -1,10 +1,13 @@
 #include "fileman.h"
+
 #include <FS.h>
 #include <SPIFFS.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-#include "wifimgr.h"
-#include "audio_player.h"   // ⬅️ to set/get volume
+
+#include "wifimgr.h"        // must expose: AsyncWebServer& WiFiMgr::getServer()
+#include "audio_player.h"   // our hardware playback module
+#include "led_stat.h"       // <-- LED status states
 
 // -------- Settings --------
 static const char* kBootPath  = "/boot.mp3";
@@ -46,17 +49,17 @@ static void addNoStore(AsyncWebServerResponse* resp) {
 static const char FILES_PAGE[] PROGMEM = R"HTML(
 <!DOCTYPE html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>File Manager</title>
+<title>X-Sound File Manager</title>
 <style>
-:root{--bg:#111;--card:#222;--ink:#EEE;--mut:#AAB;--pri:#299a2c;--warn:#a22;--link:#9ec1ff;--btn:#2563eb}
+:root{--bg:#0f0f11;--card:#1b1b22;--ink:#EDEFF2;--mut:#AAB;--warn:#b12424;--btn:#2563eb}
 *{box-sizing:border-box} html,body{height:100%}
 body{background:var(--bg);color:var(--ink);font-family:system-ui,Segoe UI,Roboto,Arial;margin:0}
 .wrap{min-height:100%;display:flex;align-items:center;justify-content:center;padding:env(safe-area-inset-top) 12px env(safe-area-inset-bottom)}
-.card{width:100%;max-width:520px;margin:16px auto;background:var(--card);padding:18px;border-radius:12px;box-shadow:0 8px 20px #0008}
+.card{width:100%;max-width:540px;margin:16px auto;background:var(--card);padding:18px;border-radius:12px;box-shadow:0 8px 20px #0008}
 h1{margin:.2rem 0 1rem;font-size:1.45rem}
 .grid{display:grid;grid-template-columns:1fr;gap:.7rem}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;align-items:center}
-input[type=file],button{width:100%;padding:.7rem .8rem;border-radius:9px;border:1px solid #555;background:#111;color:var(--ink);font-size:1rem}
+input[type=file],button,input[type=range]{width:100%;padding:.7rem .8rem;border-radius:9px;border:1px solid #555;background:#111;color:var(--ink);font-size:1rem}
 button{cursor:pointer}
 .btn{background:var(--btn);border:0;color:#fff}
 .btn-del{background:var(--warn)}
@@ -66,15 +69,14 @@ button{cursor:pointer}
 .group{padding:.7rem;border:1px solid #444;border-radius:12px;background:#171717}
 .actions{display:flex;gap:.5rem;flex-wrap:wrap}
 .note{color:var(--mut);font-size:.92rem;margin-top:.4rem}
-.link{color:var(--link);text-decoration:none}
 hr{border:none;height:1px;background:#333;margin:.8rem 0}
 .playrow{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem}
-.sliderrow{display:grid;grid-template-columns:1fr auto;gap:.6rem;align-items:center;margin-top:.6rem}
+.sliderrow{display:grid;grid-template-columns:1fr auto;gap:.6rem;align-items:center;margin-top:.3rem}
 .valuechip{background:#0f0f0f;border:1px solid #444;border-radius:9px;padding:.4rem .6rem;font-variant-numeric:tabular-nums}
 </style></head>
 <body>
 <div class="wrap"><div class="card">
-  <h1>File Manager</h1>
+  <h1>X-Sound File Manager</h1>
   <div class="grid">
 
     <!-- Volume -->
@@ -215,13 +217,14 @@ refresh();
 </body></html>
 )HTML";
 
-// -------------- Handlers --------------
+// -------------- Helpers --------------
 static String slotToPath(const String& slot) {
   if (slot == "boot")  return String(kBootPath);
   if (slot == "eject") return String(kEjectPath);
   return String();
 }
 
+// -------------- REST: list --------------
 static void handleList(AsyncWebServerRequest* req) {
   uint64_t total = SPIFFS.totalBytes();
   uint64_t used  = SPIFFS.usedBytes();
@@ -247,17 +250,26 @@ static void handleList(AsyncWebServerRequest* req) {
   req->send(resp);
 }
 
+// -------------- REST: download --------------
 static void handleDownload(AsyncWebServerRequest* req) {
-  if (!req->hasParam("slot")) { req->send(400, "application/json", "{\"ok\":false,\"err\":\"slot param\"}"); return; }
+  if (!req->hasParam("slot")) {
+    req->send(400, "application/json", "{\"ok\":false,\"err\":\"slot param\"}");
+    return;
+  }
   String p = slotToPath(req->getParam("slot")->value());
-  if (!p.length() || !SPIFFS.exists(p)) { req->send(404, "application/json", "{\"ok\":false,\"err\":\"not found\"}"); return; }
+  if (!p.length() || !SPIFFS.exists(p)) {
+    req->send(404, "application/json", "{\"ok\":false,\"err\":\"not found\"}");
+    return;
+  }
+
   AsyncWebServerResponse* resp = req->beginResponse(SPIFFS, p, "audio/mpeg", /*download*/ true);
-  const char* fname = (p == kBootPath) ? "boot.mp3" : "eject.mp3";
+  const char* fname = (p == String("/boot.mp3")) ? "boot.mp3" : "eject.mp3";
   resp->addHeader("Content-Disposition", String("attachment; filename=\"") + fname + "\"");
   addNoStore(resp);
   req->send(resp);
 }
 
+// -------------- REST: delete --------------
 static void handleDelete(AsyncWebServerRequest* req) {
   if (!req->hasParam("slot")) { req->send(400, "application/json", "{\"ok\":false,\"err\":\"slot param\"}"); return; }
   String p = slotToPath(req->getParam("slot")->value());
@@ -266,6 +278,7 @@ static void handleDelete(AsyncWebServerRequest* req) {
   req->send(ok ? 200 : 500, "application/json", ok ? "{\"ok\":true}" : "{\"ok\":false}");
 }
 
+// -------------- REST: upload (multipart) --------------
 static void handleUploadCompleted(AsyncWebServerRequest* request, bool ok, const char* errMsg) {
   String body = ok ? "{\"ok\":true}" : (String("{\"ok\":false,\"err\":\"") + (errMsg?errMsg:"fail") + "\"}");
   auto* resp = request->beginResponse(ok?200:400, "application/json", body);
@@ -273,6 +286,95 @@ static void handleUploadCompleted(AsyncWebServerRequest* request, bool ok, const
   request->send(resp);
 }
 
+static void handleUpload(AsyncWebServerRequest* request, String filename, size_t index, uint8_t* data, size_t len, bool final) {
+  static File out;
+  static String path;
+  static size_t written = 0;
+  static bool ok = true;
+  static String err;
+
+  if (index == 0) {
+    ok = true; err = ""; written = 0; path = "";
+    if (!request->hasParam("slot")) { ok=false; err="slot param"; }
+    else {
+      String slot = request->getParam("slot")->value();
+      path = slotToPath(slot);
+      if (!path.length()) { ok=false; err="bad slot"; }
+    }
+    String lower = filename; lower.toLowerCase();
+    if (ok && !lower.endsWith(".mp3")) { ok=false; err="only .mp3"; }
+
+    if (ok) {
+      uint64_t total = SPIFFS.totalBytes(), used=SPIFFS.usedBytes();
+      if (total - used < (uint64_t)len + 4096) { ok=false; err="not enough space"; }
+    }
+    if (ok) {
+      SPIFFS.remove(path);
+      out = SPIFFS.open(path, "w");
+      if (!out) { ok=false; err="open fail"; }
+    }
+  }
+
+  if (ok && len) {
+    if (written + len > kMaxUploadBytes) { ok=false; err="file too large"; }
+    else if (out.write(data, len) != len) { ok=false; err="write fail"; }
+    else written += len;
+  }
+
+  if (final) {
+    if (out) out.close();
+    handleUploadCompleted(request, ok, ok?nullptr:err.c_str());
+    path = ""; written = 0; ok = true; err="";
+  }
+}
+
+// -------------- REST: volume --------------
+static void handleVolGet(AsyncWebServerRequest* req) {
+  uint8_t v = AudioPlayer::getVolume();
+  String body = String("{\"vol\":") + String((int)v) + "}";
+  auto* resp = req->beginResponse(200, "application/json", body);
+  addNoStore(resp);
+  req->send(resp);
+}
+
+static void handleVolSet(AsyncWebServerRequest* req) {
+  if (!req->hasParam("val")) {
+    req->send(400, "application/json", "{\"ok\":false,\"err\":\"val param\"}");
+    return;
+  }
+  int v = req->getParam("val")->value().toInt();
+  if (v < 0) v = 0; if (v > 255) v = 255;
+  AudioPlayer::setVolume((uint8_t)v);
+  req->send(200, "application/json", "{\"ok\":true}");
+}
+
+// -------------- REST: play/stop --------------
+static void handlePlay(AsyncWebServerRequest* req) {
+  if (!req->hasParam("slot")) {
+    req->send(400, "application/json", "{\"ok\":false,\"err\":\"slot param\"}");
+    return;
+  }
+  String slot = req->getParam("slot")->value();
+  bool ok = false;
+  if (slot == "boot")       ok = AudioPlayer::playBoot();
+  else if (slot == "eject") ok = AudioPlayer::playEject();
+
+  if (ok) {
+    LedStat::setStatus(LedStatus::Playing);     // <-- indicate active playback
+    req->send(200, "application/json", "{\"ok\":true}");
+  } else {
+    LedStat::setStatus(LedStatus::Error);       // <-- indicate playback error
+    req->send(404, "application/json", "{\"ok\":false}");
+  }
+}
+
+static void handleStop(AsyncWebServerRequest* req) {
+  AudioPlayer::stop();
+  LedStat::setStatus(LedStatus::WifiConnected); // <-- back to idle/ready
+  req->send(200, "application/json", "{\"ok\":true}");
+}
+
+// -------------- Route registration --------------
 static void registerRoutes(AsyncWebServer& server) {
   // Main UI
   server.on("/files", HTTP_GET, [](AsyncWebServerRequest* req){
@@ -281,95 +383,30 @@ static void registerRoutes(AsyncWebServer& server) {
     req->send(resp);
   });
 
-  // API: list
-  server.on("/api/files", HTTP_GET, [](AsyncWebServerRequest* req){ handleList(req); });
+  // File APIs
+  server.on("/api/files",    HTTP_GET,  [](AsyncWebServerRequest* r){ handleList(r);     });
+  server.on("/api/download", HTTP_GET,  [](AsyncWebServerRequest* r){ handleDownload(r); });
+  server.on("/api/delete",   HTTP_POST, [](AsyncWebServerRequest* r){ handleDelete(r);   });
 
-  // API: download
-  server.on("/api/download", HTTP_GET, [](AsyncWebServerRequest* req){ handleDownload(req); });
-
-  // API: delete
-  server.on("/api/delete", HTTP_POST, [](AsyncWebServerRequest* req){ handleDelete(req); });
-
-  // API: upload (multipart)
-  server.on(
-    "/api/upload",
-    HTTP_POST,
-    [](AsyncWebServerRequest* request){
-      if (!request->hasParam("slot")) {
-        handleUploadCompleted(request, false, "slot param");
-      }
-    },
-    [](AsyncWebServerRequest* request, String filename, size_t index, uint8_t* data, size_t len, bool final){
-      static File out;
-      static String path;
-      static size_t written = 0;
-      static bool ok = true;
-      static String err;
-
-      if (index == 0) {
-        if (!request->hasParam("slot")) { ok=false; err="slot param"; }
-        else {
-          String slot = request->getParam("slot")->value();
-          path = slotToPath(slot);
-          if (!path.length()) { ok=false; err="bad slot"; }
-        }
-
-        String lower = filename; lower.toLowerCase();
-        if (ok && !lower.endsWith(".mp3")) { ok=false; err="only .mp3"; }
-
-        if (ok) {
-          uint64_t total = SPIFFS.totalBytes(), used=SPIFFS.usedBytes();
-          if (total - used < (uint64_t)len + 4096) { ok=false; err="not enough space"; }
-        }
-        if (ok) {
-          SPIFFS.remove(path);
-          out = SPIFFS.open(path, "w");
-          if (!out) { ok=false; err="open fail"; }
-          written = 0;
-        }
-      }
-
-      if (ok && len) {
-        if (written + len > kMaxUploadBytes) { ok=false; err="file too large"; }
-        else if (out.write(data, len) != len) { ok=false; err="write fail"; }
-        else written += len;
-      }
-
-      if (final) {
-        if (out) out.close();
-        handleUploadCompleted(request, ok, ok?nullptr:err.c_str());
-        path = ""; written = 0; ok = true; err="";
-      }
-    }
+  // Upload (multipart). Response is sent in upload handler at final=true.
+  server.on("/api/upload", HTTP_POST,
+    [](AsyncWebServerRequest* request){ /* response is sent in upload callback */ },
+    handleUpload
   );
 
-  // ===== Volume API =====
-  // GET  /api/vol        -> {"vol": N}
-  // POST /api/vol?val=N  -> {"ok":true}
-  server.on("/api/vol", HTTP_GET, [](AsyncWebServerRequest* req){
-    uint8_t v = AudioPlayer::getVolume();
-    String body = String("{\"vol\":") + String((int)v) + "}";
-    auto* resp = req->beginResponse(200, "application/json", body);
-    addNoStore(resp);
-    req->send(resp);
-  });
-
-  server.on("/api/vol", HTTP_POST, [](AsyncWebServerRequest* req){
-    if (!req->hasParam("val")) {
-      req->send(400, "application/json", "{\"ok\":false,\"err\":\"val param\"}");
-      return;
-    }
-    int v = req->getParam("val")->value().toInt();
-    if (v < 0) v = 0; if (v > 255) v = 255;
-    AudioPlayer::setVolume((uint8_t)v);
-    req->send(200, "application/json", "{\"ok\":true}");
-  });
+  // Volume + audio control
+  server.on("/api/vol",  HTTP_GET,  [](AsyncWebServerRequest* r){ handleVolGet(r); });
+  server.on("/api/vol",  HTTP_POST, [](AsyncWebServerRequest* r){ handleVolSet(r); });
+  server.on("/api/play", HTTP_GET,  [](AsyncWebServerRequest* r){ handlePlay(r);   });
+  server.on("/api/stop", HTTP_POST, [](AsyncWebServerRequest* r){ handleStop(r);   });
 }
 
 namespace FileMan {
   void begin() {
-    // Ensure SPIFFS is mounted; if WiFiMgr mounted earlier, this will no-op.
+    // Ensure SPIFFS is mounted; if WiFiMgr did it earlier, this no-ops.
     SPIFFS.begin(true);
+
+    // Routes on shared server
     AsyncWebServer& server = WiFiMgr::getServer();
     registerRoutes(server);
   }

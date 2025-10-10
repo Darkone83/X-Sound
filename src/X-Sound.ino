@@ -29,13 +29,6 @@
   #define I2S_PIN_DOUT  10
 #endif
 
-// // ---- Waveshare ESP32-S3-LCD-1.47 (alt suggestion) ----
-// // #undef  I2S_PIN_BCLK
-// // #undef  I2S_PIN_LRCK
-// // #undef  I2S_PIN_DOUT
-// // #define I2S_PIN_BCLK  14
-// // #define I2S_PIN_LRCK  13
-// // #define I2S_PIN_DOUT  15
 
 // Xbox EJECT sense line (active-LOW). Use any free GPIO on your board header.
 #ifndef PIN_EJECT_SENSE
@@ -115,7 +108,7 @@ void setup() {
   FileMan::begin();
 
   // Audio (I2S + Helix MP3)
-  AudioPlayer::begin(I2S_PIN_BCLK, I2S_PIN_LRCK, I2S_PIN_DOUT, /*volume*/200);
+  AudioPlayer::begin(I2S_PIN_BCLK, I2S_PIN_LRCK, I2S_PIN_DOUT);
 
   // --- Eject sense input ---
   // Prefer INPUT (true high-Z). If your wire floats/noisy, enable internal PULLUP.

@@ -1,10 +1,13 @@
 #pragma once
+#include <Arduino.h>
 
 enum class LedStatus {
     Booting,
     Portal,
     WifiConnected,
     WifiFailed,
+    Playing,   // NEW: audio is playing
+    Error      // NEW: generic error (e.g., playback/file)
 };
 
 namespace LedStat {

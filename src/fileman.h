@@ -2,6 +2,7 @@
 #include <Arduino.h>
 
 namespace FileMan {
-  // Register routes and ensure SPIFFS is mounted.
+  // Register the /files UI and REST endpoints on the shared server.
+  // SPIFFS will be (re)mounted if needed.
   void begin();
 }

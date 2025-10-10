@@ -1,92 +1,121 @@
 #include "audio_player.h"
 
-#include <Arduino.h>
-#include <SPIFFS.h>
 #include <FS.h>
-
-// Helix MP3 via ESP8266Audio (works on ESP32/ESP32-S3)
+#include <SPIFFS.h>
 #include <AudioFileSourceFS.h>
 #include <AudioGeneratorMP3.h>
 #include <AudioOutputI2S.h>
 
-namespace {
-  AudioFileSourceFS*  g_src  = nullptr;   // file source (SPIFFS)
-  AudioGeneratorMP3*  g_mp3  = nullptr;   // helix mp3 decoder
-  AudioOutputI2S*     g_i2s  = nullptr;   // i2s sink
+#include "led_stat.h"   // For LedStatus::Playing / Error / WifiConnected
 
-  uint8_t g_volume = 200;                 // 0..255
+// Default sound paths (match FileMan)
+static const char* kBootPath  = "/boot.mp3";
+static const char* kEjectPath = "/eject.mp3";
 
-  // Clean up current playback chain, keep I2S alive between tracks
-  void cleanupPlayback() {
-    if (g_mp3) { g_mp3->stop(); delete g_mp3; g_mp3 = nullptr; }
-    if (g_src) { delete g_src; g_src = nullptr; }
-  }
+// Audio objects
+static AudioFileSourceFS* fileSrc = nullptr;
+static AudioGeneratorMP3* mp3     = nullptr;
+static AudioOutputI2S*    out     = nullptr;
+
+// I2S pin config (from begin)
+static int g_bclk = -1, g_lrclk = -1, g_dout = -1;
+
+// Volume (0..255) -> I2S gain
+static uint8_t g_vol = 200;
+
+// Map 0..255 -> 0.0 .. ~2.0 gain (linear)
+static float volToGain(uint8_t v) {
+  // Keep a sane upper bound to avoid clipping; tweak if needed
+  return (float)v * (2.0f / 255.0f);
 }
 
 namespace AudioPlayer {
 
-void begin(int pin_bclk, int pin_lrck, int pin_dout, uint8_t volume_0_255) {
-  g_volume = volume_0_255;
+void begin(int bclkPin, int lrclkPin, int doutPin) {
+  g_bclk = bclkPin; g_lrclk = lrclkPin; g_dout = doutPin;
 
-  // Mount filesystem (idempotent in case it’s already mounted)
+  // Prepare SPIFFS if not already (safe if already mounted)
   SPIFFS.begin(true);
 
-  // Create I2S output: 44.1 kHz, stereo
-  g_i2s = new AudioOutputI2S();
-  g_i2s->SetPinout(pin_bclk, pin_lrck, pin_dout);
-  g_i2s->SetChannels(2);          // stereo; mono MP3s mirror to both
-  g_i2s->SetRate(44100);          // standard CD rate
-  g_i2s->SetOutputModeMono(false);
-  g_i2s->SetGain(g_volume / 255.0f);
+  // Create output once; reuse across tracks
+  out = new AudioOutputI2S();
+  // I2S pinning (ESP32)
+  out->SetPinout(g_bclk, g_lrclk, g_dout);
+  out->SetChannels(1);            // mono
+  out->SetGain(volToGain(g_vol)); // initial gain
+
+  // Idle LED
+  LedStat::setStatus(LedStatus::WifiConnected);
 }
 
-bool playPath(const char* path, bool stop_current) {
-  if (!path || !*path) return false;
-  if (!SPIFFS.exists(path)) return false;
+void setVolume(uint8_t v) {
+  g_vol = v;
+  if (out) out->SetGain(volToGain(g_vol));
+}
 
-  if (g_mp3 && !stop_current) return false;
-  cleanupPlayback();
+uint8_t getVolume() { return g_vol; }
 
-  // File source: pass FS explicitly (avoids global SPIFFS header issue on some cores)
-  g_src = new AudioFileSourceFS(SPIFFS, path);
-  if (!g_src) { cleanupPlayback(); return false; }
+// Internal: cleanup after stop/end/error
+static void cleanupPlayer() {
+  if (mp3) {
+    mp3->stop();
+    delete mp3; mp3 = nullptr;
+  }
+  if (fileSrc) {
+    fileSrc->close();
+    delete fileSrc; fileSrc = nullptr;
+  }
+}
 
-  // Decoder
-  g_mp3 = new AudioGeneratorMP3();
-  if (!g_mp3) { cleanupPlayback(); return false; }
+bool playFile(const char* path) {
+  // Ensure any current playback is stopped
+  cleanupPlayer();
 
-  // Start decoding to I2S
-  if (!g_mp3->begin(g_src, g_i2s)) {
-    cleanupPlayback();
+  if (!SPIFFS.exists(path)) {
+    LedStat::setStatus(LedStatus::Error);
     return false;
   }
+
+  fileSrc = new AudioFileSourceFS(SPIFFS, path);
+  mp3     = new AudioGeneratorMP3();
+
+  // Start decoder
+  bool ok = mp3->begin(fileSrc, out);
+  if (!ok) {
+    cleanupPlayer();
+    LedStat::setStatus(LedStatus::Error);
+    return false;
+  }
+
+  // Indicate now playing
+  LedStat::setStatus(LedStatus::Playing);
   return true;
 }
 
-void loop() {
-  if (g_mp3) {
-    // When loop() returns false, track finished or hit an error
-    if (!g_mp3->loop()) {
-      cleanupPlayback();
-    }
-  }
-}
+bool playBoot()  { return playFile(kBootPath);  }
+bool playEject() { return playFile(kEjectPath); }
 
 void stop() {
-  cleanupPlayback();
+  cleanupPlayer();
+  // Back to idle/ready (Wi-Fi connected state color)
+  LedStat::setStatus(LedStatus::WifiConnected);
 }
 
 bool isPlaying() {
-  return g_mp3 != nullptr;
+  return (mp3 && mp3->isRunning());
 }
 
-void setVolume(uint8_t vol) {
-  g_volume = vol;
-  if (g_i2s) g_i2s->SetGain(g_volume / 255.0f);
-}
+void loop() {
+  // If nothing playing, nothing to do
+  if (!mp3) return;
 
-uint8_t getVolume() {
-  return g_volume;
+  // Drive the decoder; false => finished or error
+  if (!mp3->loop()) {
+    // Either finished cleanly or encountered an error.
+    // Clean up and return to idle state.
+    cleanupPlayer();
+    LedStat::setStatus(LedStatus::WifiConnected);
+  }
 }
 
 } // namespace AudioPlayer
