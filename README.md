@@ -132,6 +132,7 @@ This section outlines the **recommended connection points** on the **original Xb
 | **No audio** | Verify `/boot.mp3` & `/eject.mp3` exist and are valid MP3s |
 | **Distortion** | Lower volume or re-encode audio as 44.1 kHz mono @128 kbps |
 | **Eject not working** | Check GPIO9 pull-up and Xbox signal polarity |
+| **Fast blinking red LED** | Error with file playback, ensure file is the proper format (MP3 **96 - 128kpbs** 44.1kHz mono under 30s) |
 
 ---
 
