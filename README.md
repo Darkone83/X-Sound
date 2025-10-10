@@ -3,7 +3,7 @@
   <img src="images/DC logo.png" width="180"/>
 </p>
 
-# X-Sound (Original Xbox Audio Helper)
+# X-Sound
 
 A compact ESP32-S3 project that adds **boot** and **eject** sounds to the **original Xbox**, blending classic hardware with modern web-managed sound control.  
 Designed and developed by **Darkone83 / Darkone Customs**.
