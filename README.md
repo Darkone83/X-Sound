@@ -15,7 +15,7 @@ Designed and developed by **Darkone83 / Darkone Customs**.
 - **Boot & Eject Sound Playback**
   - Plays `/boot.mp3` automatically on power-up  
   - Plays `/eject.mp3` when the Xbox eject line is triggered
-  - .mp3 should be encoded between **98 - 128kbps**, in 44.1Hz and in mono (keep sounds under 30s)
+  - .mp3 should be encoded between **98 - 128kbps**, in 44.1kHz and in mono (keep sounds under 30s)
 - **Web-Based File Manager**
   - Upload, delete, and play audio files via browser  
   - Built-in **volume slider** and playback test buttons
