@@ -80,6 +80,31 @@ Designed and developed by **Darkone83 / Darkone Customs**.
 
 ---
 
+## 🧷 Hardware Installation (Overview)
+
+> ⚠️ *Disconnect your Xbox from power before installation.*
+
+This section outlines the **recommended connection points** on the **original Xbox motherboard** for integrating the X-Sound module.
+
+- **Ground (GND):**  
+  Tap any reliable chassis or board ground. Common choices include the **metal shielding**, **DVD power connector ground**, or **front panel ground pins**.
+
+- **5V (Power Input):**  
+  Pull from the **LPC** or from the **DVD power plug 5V line**.  
+
+- **3.3V (Sense/Enable):**  
+  Connect to the **3.3V rail** present on the LPC connector (CN2 pin 3).  
+  Used as a logic reference and power-enable signal.
+
+- **EJECT Signal:**  
+  Tap the **EJECT line from the front panel connector (CN2 pin 5)** or the corresponding trace on the mainboard header.  
+  Connect this to **GPIO9** on the ESP32-S3 through a **100–220 kΩ series resistor**.  
+  The pin is configured with an internal pull-up, detecting an **active-LOW pulse** when the EJECT button is pressed.
+
+> 💡 Keep all wiring short and tidy. Use twisted pairs or shielded leads for audio and eject lines if possible to avoid interference.
+
+---
+
 ## 🌐 Wi-Fi Setup & File Manager Access
 
 1. **First Boot:**  
@@ -102,7 +127,7 @@ Designed and developed by **Darkone83 / Darkone Customs**.
 
 | Issue | Solution |
 |-------|-----------|
-| **No web page** | Retry `http://xsound.local` or check led status, Green WiFi is connected, Red No WiFi connection |
+| **No web page** | Retry `http://xsound.local` or check LED status — Green = Wi-Fi connected, Red = no Wi-Fi |
 | **No audio** | Verify `/boot.mp3` & `/eject.mp3` exist and are valid MP3s |
 | **Distortion** | Lower volume or re-encode audio as 44.1 kHz mono @128 kbps |
 | **Eject not working** | Check GPIO9 pull-up and Xbox signal polarity |
