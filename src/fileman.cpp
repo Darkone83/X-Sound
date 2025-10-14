@@ -4,15 +4,98 @@
 #include <SPIFFS.h>
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
+#include <Preferences.h>
 
-#include "wifimgr.h"        // must expose: AsyncWebServer& WiFiMgr::getServer()
-#include "audio_player.h"   // our hardware playback module
-#include "led_stat.h"       // <-- LED status states
+#include "wifimgr.h"
+#include "audio_player.h"
+#include "led_stat.h"
 
 // -------- Settings --------
 static const char* kBootPath  = "/boot.mp3";
 static const char* kEjectPath = "/eject.mp3";
 static const size_t kMaxUploadBytes = 6 * 1024 * 1024; // safety cap
+
+// -------- Persistent prefs (xsound namespace) --------
+// Cached settings to reduce NVS wear
+static uint8_t g_volume = 200;          // 0–255
+static bool    g_bootEnabled  = true;
+static bool    g_ejectEnabled = true;
+static unsigned long g_lastVolWriteMs = 0;
+
+// NVS helpers
+static void fmPrefsReadAll() {
+  Preferences p;
+  if (p.begin("xsound", /*ro=*/true)) {
+    g_volume       = p.getUChar("volume", 200);
+    g_bootEnabled  = p.getBool("boot_enabled",  true);
+    g_ejectEnabled = p.getBool("eject_enabled", true);
+    p.end();
+  }
+}
+
+static void fmBootSoundWrite(bool en) {
+  if (g_bootEnabled == en) return;
+  g_bootEnabled = en;
+  Preferences p;
+  if (p.begin("xsound", /*ro=*/false)) {
+    p.putBool("boot_enabled", en);
+    p.end();
+  }
+}
+
+static void fmEjectSoundWrite(bool en) {
+  if (g_ejectEnabled == en) return;
+  g_ejectEnabled = en;
+  Preferences p;
+  if (p.begin("xsound", /*ro=*/false)) {
+    p.putBool("eject_enabled", en);
+    p.end();
+  }
+}
+
+// Persist volume only when changed (and not too frequently)
+static void fmVolumeWrite(uint8_t vol) {
+  if (g_volume == vol) return;
+  g_volume = vol;
+  unsigned long now = millis();
+  if (now - g_lastVolWriteMs < 250) return; // soft throttle
+  g_lastVolWriteMs = now;
+  Preferences p;
+  if (p.begin("xsound", /*ro=*/false)) {
+    p.putUChar("volume", vol);
+    p.end();
+  }
+}
+
+// Parse an integer JSON field like {"val":123} without pulling in ArduinoJson
+static int parseJsonIntField(const String& body, const char* key, int fallback = -1) {
+  // Look for "key"
+  String needle = String("\"") + key + "\"";
+  int k = body.indexOf(needle);
+  if (k < 0) return fallback;
+  // Find the colon after "key"
+  int colon = body.indexOf(':', k + needle.length());
+  if (colon < 0) return fallback;
+
+  // Skip whitespace
+  int i = colon + 1;
+  while (i < (int)body.length() && (body[i]==' '||body[i]=='\t'||body[i]=='\r'||body[i]=='\n')) i++;
+
+  // Optional sign
+  bool neg = false;
+  if (i < (int)body.length() && (body[i]=='+' || body[i]=='-')) { neg = (body[i]=='-'); i++; }
+
+  // Read digits
+  if (i >= (int)body.length() || body[i]<'0' || body[i]>'9') return fallback;
+  long v = 0;
+  while (i < (int)body.length() && body[i] >= '0' && body[i] <= '9') {
+    v = v*10 + (body[i]-'0');
+    i++;
+    if (v > 1000000) break; // sanity
+  }
+  if (neg) v = -v;
+  return (int)v;
+}
 
 // -------------- Utils --------------
 static String humanSize(uint64_t b) {
@@ -73,6 +156,7 @@ hr{border:none;height:1px;background:#333;margin:.8rem 0}
 .playrow{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.4rem}
 .sliderrow{display:grid;grid-template-columns:1fr auto;gap:.6rem;align-items:center;margin-top:.3rem}
 .valuechip{background:#0f0f0f;border:1px solid #444;border-radius:9px;padding:.4rem .6rem;font-variant-numeric:tabular-nums}
+.badge{display:inline-block;padding:.15rem .5rem;border-radius:999px;border:1px solid #444;background:#0f0f0f;font-size:.85rem}
 </style></head>
 <body>
 <div class="wrap"><div class="card">
@@ -86,7 +170,25 @@ hr{border:none;height:1px;background:#333;margin:.8rem 0}
         <input id="vol" type="range" min="0" max="255" step="1" value="200" oninput="onVolSlide(this.value)" onchange="commitVol(this.value)">
         <div class="valuechip"><span id="volv">200</span></div>
       </div>
-      <div class="note">Adjust output gain in real time.</div>
+      <div class="note">Adjust output gain in real time. (Persistent)</div>
+    </div>
+
+    <!-- Boot Sound Toggle -->
+    <div class="group">
+      <div class="kv"><strong>Boot Sound</strong><span class="badge" id="bootState">…</span></div>
+      <div class="actions">
+        <button class="btn" id="bootBtn" onclick="toggleBoot()">…</button>
+      </div>
+      <div class="note">Controls whether <code>/boot.mp3</code> plays at startup. (Persistent)</div>
+    </div>
+
+    <!-- Eject Sound Toggle -->
+    <div class="group">
+      <div class="kv"><strong>Eject Sound</strong><span class="badge" id="ejectState">…</span></div>
+      <div class="actions">
+        <button class="btn" id="ejectBtn" onclick="toggleEject()">…</button>
+      </div>
+      <div class="note">Controls whether <code>/eject.mp3</code> plays when triggered. (Persistent)</div>
     </div>
 
     <div class="kv"><span>Storage used</span><span id="used">…</span></div>
@@ -151,6 +253,20 @@ function refresh(){
     const vv= document.getElementById('volv');
     s.value = v; vv.textContent = v;
   }).catch(()=>0);
+
+  fetch('/api/boot_pref',{cache:'no-store'}).then(r=>r.json()).then(j=>{
+    const on = !!j.enabled;
+    document.getElementById('bootState').textContent = on ? 'Enabled' : 'Disabled';
+    document.getElementById('bootBtn').textContent   = on ? 'Disable Boot Sound' : 'Enable Boot Sound';
+    document.getElementById('bootBtn').dataset.next  = on ? '0' : '1';
+  }).catch(()=>setStatus('Failed to read boot sound setting.'));
+
+  fetch('/api/eject_pref',{cache:'no-store'}).then(r=>r.json()).then(j=>{
+    const on = !!j.enabled;
+    document.getElementById('ejectState').textContent = on ? 'Enabled' : 'Disabled';
+    document.getElementById('ejectBtn').textContent   = on ? 'Disable Eject Sound' : 'Enable Eject Sound';
+    document.getElementById('ejectBtn').dataset.next  = on ? '0' : '1';
+  }).catch(()=>setStatus('Failed to read eject sound setting.'));
 }
 
 function onVolSlide(v){
@@ -163,7 +279,7 @@ function commitVol(v){
   volCommitTimer = setTimeout(()=>{
     fetch('/api/vol?val='+encodeURIComponent(v), {method:'POST'})
       .then(r=>r.json()).then(j=>{
-        setStatus(j.ok ? ('Volume set to '+v) : ('Volume change failed'));
+        setStatus(j.ok ? ('Volume set to '+j.vol) : ('Volume change failed'));
       }).catch(()=>setStatus('Volume change failed (network).'));
   }, 120);
 }
@@ -202,7 +318,7 @@ function downloadFile(slot){
 function play(slot){
   fetch('/api/play?slot='+encodeURIComponent(slot), {cache:'no-store'})
     .then(r=>r.json()).then(j=>{
-      setStatus(j.ok ? ('Playing '+slot+'…') : ('Play failed (missing file?)'));
+      setStatus(j.ok ? ('Playing '+slot+'…') : (j.err ? ('Play failed: '+j.err) : 'Play failed (missing file?)'));
     }).catch(()=>setStatus('Play failed (network).'));
 }
 
@@ -210,6 +326,42 @@ function stopPlay(){
   fetch('/api/stop', {method:'POST'}).then(r=>r.json()).then(j=>{
     setStatus(j.ok ? 'Stopped.' : 'Stop failed.');
   }).catch(()=>setStatus('Stop failed (network).'));
+}
+
+function toggleBoot(){
+  const btn = document.getElementById('bootBtn');
+  const next = btn.dataset.next || '0';
+  fetch('/api/boot_pref?enabled='+encodeURIComponent(next), {method:'POST'})
+    .then(r=>r.json()).then(j=>{
+      if (j.ok){
+        const on = !!j.enabled;
+        document.getElementById('bootState').textContent = on ? 'Enabled' : 'Disabled';
+        btn.textContent = on ? 'Disable Boot Sound' : 'Enable Boot Sound';
+        btn.dataset.next = on ? '0' : '1';
+        setStatus('Boot sound ' + (on ? 'enabled' : 'disabled') + '.');
+      } else {
+        setStatus('Failed to update boot sound setting.');
+      }
+    })
+    .catch(()=>setStatus('Failed to update boot sound setting (network).'));
+}
+
+function toggleEject(){
+  const btn = document.getElementById('ejectBtn');
+  const next = btn.dataset.next || '0';
+  fetch('/api/eject_pref?enabled='+encodeURIComponent(next), {method:'POST'})
+    .then(r=>r.json()).then(j=>{
+      if (j.ok){
+        const on = !!j.enabled;
+        document.getElementById('ejectState').textContent = on ? 'Enabled' : 'Disabled';
+        btn.textContent = on ? 'Disable Eject Sound' : 'Enable Eject Sound';
+        btn.dataset.next = on ? '0' : '1';
+        setStatus('Eject sound ' + (on ? 'enabled' : 'disabled') + '.');
+      } else {
+        setStatus('Failed to update eject sound setting.');
+      }
+    })
+    .catch(()=>setStatus('Failed to update eject sound setting (network).'));
 }
 
 refresh();
@@ -243,7 +395,7 @@ static void handleList(AsyncWebServerRequest* req) {
   j += "\"used_h\":\"" + jsonEscape(humanSize(used)) + "\",";
   j += "\"free_h\":\"" + jsonEscape(humanSize(freeb)) + "\",";
   j += "\"boot\":{\"exists\":" + String(boot.exists?"true":"false") + ",\"size\":" + String((uint32_t)boot.size) + ",\"size_h\":\"" + jsonEscape(humanSize(boot.size)) + "\"},";
-  j += "\"eject\":{\"exists\":" + String(eject.exists?"true":"false") + ",\"size\":" + String((uint32_t)eject.size) + ",\"size_h\":\"" + jsonEscape(humanSize(eject.size)) + "\"}";
+  j += "\"eject\":{\"exists\":" + String((eject.exists?"true":"false")) + ",\"size\":" + String((uint32_t)eject.size) + ",\"size_h\":\"" + jsonEscape(humanSize(eject.size)) + "\"}";
   j += "}";
   auto* resp = req->beginResponse(200, "application/json", j);
   addNoStore(resp);
@@ -330,22 +482,38 @@ static void handleUpload(AsyncWebServerRequest* request, String filename, size_t
 
 // -------------- REST: volume --------------
 static void handleVolGet(AsyncWebServerRequest* req) {
-  uint8_t v = AudioPlayer::getVolume();
-  String body = String("{\"vol\":") + String((int)v) + "}";
+  String body = String("{\"vol\":") + String((int)g_volume) + "}";
   auto* resp = req->beginResponse(200, "application/json", body);
   addNoStore(resp);
   req->send(resp);
 }
 
 static void handleVolSet(AsyncWebServerRequest* req) {
-  if (!req->hasParam("val")) {
+  // accept query (?val=), x-www-form-urlencoded (val), or JSON {"val":N}
+  int vParsed = -1;
+
+  if (req->hasParam("val")) {
+    vParsed = req->getParam("val")->value().toInt();
+  } else if (req->hasParam("plain")) {
+    const String body = req->getParam("plain")->value();
+    vParsed = parseJsonIntField(body, "val", -1);
+  }
+
+  if (vParsed < 0) {
     req->send(400, "application/json", "{\"ok\":false,\"err\":\"val param\"}");
     return;
   }
-  int v = req->getParam("val")->value().toInt();
-  if (v < 0) v = 0; if (v > 255) v = 255;
-  AudioPlayer::setVolume((uint8_t)v);
-  req->send(200, "application/json", "{\"ok\":true}");
+
+  if (vParsed < 0) vParsed = 0;
+  if (vParsed > 255) vParsed = 255;
+
+  AudioPlayer::setVolume((uint8_t)vParsed);
+  fmVolumeWrite((uint8_t)vParsed);   // persist volume (throttled)
+
+  String body = String("{\"ok\":true,\"vol\":") + String(vParsed) + "}";
+  auto* resp = req->beginResponse(200, "application/json", body);
+  addNoStore(resp);
+  req->send(resp);
 }
 
 // -------------- REST: play/stop --------------
@@ -355,23 +523,70 @@ static void handlePlay(AsyncWebServerRequest* req) {
     return;
   }
   String slot = req->getParam("slot")->value();
+
+  if (slot == "eject" && !g_ejectEnabled) {
+    req->send(200, "application/json", "{\"ok\":false,\"err\":\"eject disabled\"}");
+    return;
+  }
+
   bool ok = false;
   if (slot == "boot")       ok = AudioPlayer::playBoot();
   else if (slot == "eject") ok = AudioPlayer::playEject();
 
   if (ok) {
-    LedStat::setStatus(LedStatus::Playing);     // <-- indicate active playback
+    LedStat::setStatus(LedStatus::Playing);
     req->send(200, "application/json", "{\"ok\":true}");
   } else {
-    LedStat::setStatus(LedStatus::Error);       // <-- indicate playback error
+    LedStat::setStatus(LedStatus::Error);
     req->send(404, "application/json", "{\"ok\":false}");
   }
 }
 
 static void handleStop(AsyncWebServerRequest* req) {
   AudioPlayer::stop();
-  LedStat::setStatus(LedStatus::WifiConnected); // <-- back to idle/ready
+  LedStat::setStatus(LedStatus::WifiConnected);
   req->send(200, "application/json", "{\"ok\":true}");
+}
+
+// -------------- REST: boot/eject sound prefs --------------
+static void handleBootPrefGet(AsyncWebServerRequest* req) {
+  String body = String("{\"enabled\":") + (g_bootEnabled ? "true" : "false") + "}";
+  auto* resp = req->beginResponse(200, "application/json", body);
+  addNoStore(resp);
+  req->send(resp);
+}
+
+static void handleBootPrefSet(AsyncWebServerRequest* req) {
+  if (!req->hasParam("enabled")) {
+    req->send(400, "application/json", "{\"ok\":false,\"err\":\"enabled param\"}");
+    return;
+  }
+  const bool en = (req->getParam("enabled")->value().toInt() != 0);
+  fmBootSoundWrite(en);
+  String body = String("{\"ok\":true,\"enabled\":") + (en ? "true" : "false") + "}";
+  auto* resp = req->beginResponse(200, "application/json", body);
+  addNoStore(resp);
+  req->send(resp);
+}
+
+static void handleEjectPrefGet(AsyncWebServerRequest* req) {
+  String body = String("{\"enabled\":") + (g_ejectEnabled ? "true" : "false") + "}";
+  auto* resp = req->beginResponse(200, "application/json", body);
+  addNoStore(resp);
+  req->send(resp);
+}
+
+static void handleEjectPrefSet(AsyncWebServerRequest* req) {
+  if (!req->hasParam("enabled")) {
+    req->send(400, "application/json", "{\"ok\":false,\"err\":\"enabled param\"}");
+    return;
+  }
+  const bool en = (req->getParam("enabled")->value().toInt() != 0);
+  fmEjectSoundWrite(en);
+  String body = String("{\"ok\":true,\"enabled\":") + (en ? "true" : "false") + "}";
+  auto* resp = req->beginResponse(200, "application/json", body);
+  addNoStore(resp);
+  req->send(resp);
 }
 
 // -------------- Route registration --------------
@@ -395,18 +610,27 @@ static void registerRoutes(AsyncWebServer& server) {
   );
 
   // Volume + audio control
-  server.on("/api/vol",  HTTP_GET,  [](AsyncWebServerRequest* r){ handleVolGet(r); });
-  server.on("/api/vol",  HTTP_POST, [](AsyncWebServerRequest* r){ handleVolSet(r); });
-  server.on("/api/play", HTTP_GET,  [](AsyncWebServerRequest* r){ handlePlay(r);   });
-  server.on("/api/stop", HTTP_POST, [](AsyncWebServerRequest* r){ handleStop(r);   });
+  server.on("/api/vol",        HTTP_GET,  [](AsyncWebServerRequest* r){ handleVolGet(r);      });
+  server.on("/api/vol",        HTTP_POST, [](AsyncWebServerRequest* r){ handleVolSet(r);      });
+  server.on("/api/play",       HTTP_GET,  [](AsyncWebServerRequest* r){ handlePlay(r);        });
+  server.on("/api/stop",       HTTP_POST, [](AsyncWebServerRequest* r){ handleStop(r);        });
+
+  // Boot/Eject sound prefs
+  server.on("/api/boot_pref",  HTTP_GET,  [](AsyncWebServerRequest* r){ handleBootPrefGet(r); });
+  server.on("/api/boot_pref",  HTTP_POST, [](AsyncWebServerRequest* r){ handleBootPrefSet(r); });
+  server.on("/api/eject_pref", HTTP_GET,  [](AsyncWebServerRequest* r){ handleEjectPrefGet(r); });
+  server.on("/api/eject_pref", HTTP_POST, [](AsyncWebServerRequest* r){ handleEjectPrefSet(r); });
 }
 
 namespace FileMan {
   void begin() {
-    // Ensure SPIFFS is mounted; if WiFiMgr did it earlier, this no-ops.
     SPIFFS.begin(true);
 
-    // Routes on shared server
+    // Load cached prefs once, then push volume to audio driver
+    fmPrefsReadAll();
+    if (g_volume > 255) g_volume = 255; // sanity
+    AudioPlayer::setVolume(g_volume);
+
     AsyncWebServer& server = WiFiMgr::getServer();
     registerRoutes(server);
   }

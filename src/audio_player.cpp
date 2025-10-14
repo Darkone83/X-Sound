@@ -26,7 +26,7 @@ static uint8_t g_vol = 200;
 // Map 0..255 -> 0.0 .. ~2.0 gain (linear)
 static float volToGain(uint8_t v) {
   // Keep a sane upper bound to avoid clipping; tweak if needed
-  return (float)v * (2.0f / 255.0f);
+  return (float)v * (1.0f / 255.0f);
 }
 
 namespace AudioPlayer {
