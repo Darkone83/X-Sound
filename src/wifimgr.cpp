@@ -17,24 +17,19 @@ namespace WiFiMgr {
 static String ssid, password;
 static Preferences prefs;
 static DNSServer dnsServer;
-static bool dnsActive = false;  // track DNS server state (DNSServer has no .started())
 static std::vector<String> lastScanResults;
 
 enum class State { IDLE, CONNECTING, CONNECTED, PORTAL };
-static State state = State::PORTAL;
+static State state = State::IDLE;
 
 static int connectAttempts = 0;
-static const int maxAttempts = 20;
+static const int maxAttempts = 20;  // Reduced from 50 for faster fallback
 static unsigned long lastAttempt = 0;
-static unsigned long retryDelay = 5000;
-
-// Reconnect helpers
-static unsigned long nextReconnectAt = 0;
-static unsigned long backoffMs       = 2000;     // starts at 2s
-static const unsigned long backoffMax = 60000;   // caps at 60s
+static unsigned long retryDelay = 3000;  // Increased from 2500ms
 
 // Ensure portal routes are only added once (so we don't need server.reset()).
 static bool portalRoutesAdded = false;
+static bool serverStarted = false;
 
 AsyncWebServer& getServer() {
   return server;
@@ -102,7 +97,7 @@ static const char OTA_PAGE[] PROGMEM = R"html(
       <input id="fw" type="file" accept=".bin,.bin.gz">
       <button id="go">Upload & Flash</button>
       <div class="bar"><div id="fill" class="fill up"></div></div>
-      <div id="msg" class="msg">Select a firmware <code>.bin</code> (or <code>.bin.gz</code>) and click “Upload & Flash”.</div>
+      <div id="msg" class="msg">Select a firmware <code>.bin</code> (or <code>.bin.gz</code>) and click "Upload & Flash".</div>
       <div class="row">
         <button onclick="location.href='/'">⟵ Back to WiFi Setup</button>
         <button onclick="location.href='/files'">File Manager</button>
@@ -193,15 +188,18 @@ static const char OTA_PAGE[] PROGMEM = R"html(
 
 // ===== OTA route registration =====
 static void registerOTARoutes() {
+  // Optional firmware info
   server.on("/fw", HTTP_GET, [](AsyncWebServerRequest* req){
     String v = String("TypeD/") + String(__DATE__) + " " + String(__TIME__);
     req->send(200, "text/plain", v);
   });
 
+  // OTA page
   server.on("/ota", HTTP_GET, [](AsyncWebServerRequest* req){
     req->send_P(200, "text/html", OTA_PAGE);
   });
 
+  // OTA upload/flash (streamed), JSON reply; client triggers /reboot
   server.on(
     "/ota",
     HTTP_POST,
@@ -238,6 +236,7 @@ static void registerOTARoutes() {
     }
   );
 
+  // Reboot endpoint (client calls this after success)
   server.on("/reboot", HTTP_POST, [](AsyncWebServerRequest* req){
     req->send(200, "text/plain", "Rebooting...");
     Serial.println("[OTA] Reboot requested");
@@ -256,14 +255,17 @@ static void addPortalRoutesOnce() {
   if (portalRoutesAdded) return;
   portalRoutesAdded = true;
 
+  // Small ping endpoint we can use to probe device reachability
   server.on("/ping", HTTP_GET, [](AsyncWebServerRequest *request){
     AsyncWebServerResponse* resp = request->beginResponse(200, "text/plain", "ok");
     resp->addHeader("Cache-Control", "no-store");
     request->send(resp);
   });
 
+  // ⬇️ Add OTA routes (available in AP/STA)
   registerOTARoutes();
 
+  // ---------- Portal UI ----------
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
     String page = R"HTML(
 <!DOCTYPE html>
@@ -369,6 +371,7 @@ static void addPortalRoutesOnce() {
     request->send(resp);
   });
 
+  // ---------- WiFi status ----------
   server.on("/status", HTTP_GET, [](AsyncWebServerRequest *request){
     String stat;
     if (WiFi.status() == WL_CONNECTED)
@@ -382,6 +385,7 @@ static void addPortalRoutesOnce() {
     request->send(resp);
   });
 
+  // ---------- Connect (GET) ----------
   server.on("/connect", HTTP_GET, [](AsyncWebServerRequest *request){
     String ss, pw;
     if (request->hasParam("ssid")) ss = request->getParam("ssid")->value();
@@ -390,39 +394,64 @@ static void addPortalRoutesOnce() {
       request->send(400, "text/plain", "SSID missing");
       return;
     }
+    
+    // Disconnect and clear before new attempt
+    WiFi.disconnect(true);
+    delay(100);
+    
     saveCreds(ss, pw);
     ssid = ss; password = pw;
-    state = State::CONNECTING;
-    connectAttempts = 1;
-    WiFi.mode(WIFI_AP_STA);
+    
+    // Use STA mode for connection attempts
+    WiFi.mode(WIFI_STA);
     delay(100);
+    
     WiFi.begin(ssid.c_str(), password.c_str());
+    state = State::CONNECTING;
+    connectAttempts = 0;
+    lastAttempt = millis();
+    
     AsyncWebServerResponse* resp = request->beginResponse(200, "text/plain", "Connecting to: " + ssid);
     resp->addHeader("Cache-Control", "no-store");
     request->send(resp);
   });
 
+  // ---------- Save creds (POST JSON body) ----------
   server.on("/save", HTTP_POST,
     [](AsyncWebServerRequest *request){},
     NULL,
     [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t, size_t) {
       String body; body.reserve(len ? len : 64);
       for (size_t i=0;i<len;i++) body += (char)data[i];
+      // crude parse: {"ssid":"...","pass":"..."}
       int ssidStart = body.indexOf("\"ssid\":\"") + 8;
       int ssidEnd   = body.indexOf("\"", ssidStart);
       int passStart = body.indexOf("\"pass\":\"") + 8;
       int passEnd   = body.indexOf("\"", passStart);
       String newSsid = (ssidStart >= 8 && ssidEnd > ssidStart) ? body.substring(ssidStart, ssidEnd) : "";
       String newPass = (passStart >= 8 && passEnd > passStart) ? body.substring(passStart, passEnd) : "";
+      
       if (newSsid.length() == 0) {
         request->send(400, "text/plain", "SSID missing");
         return;
       }
+      
+      // Disconnect and clear before new attempt
+      WiFi.disconnect(true);
+      delay(100);
+      
       saveCreds(newSsid, newPass);
       ssid = newSsid; password = newPass;
-      state = State::CONNECTING;
-      connectAttempts = 1;
+      
+      // Use STA mode for connection attempts
+      WiFi.mode(WIFI_STA);
+      delay(100);
+      
       WiFi.begin(newSsid.c_str(), newPass.c_str());
+      state = State::CONNECTING;
+      connectAttempts = 0;
+      lastAttempt = millis();
+      
       AsyncWebServerResponse* resp = request->beginResponse(200, "text/plain", "Connecting to: " + newSsid);
       resp->addHeader("Cache-Control", "no-store");
       request->send(resp);
@@ -430,10 +459,13 @@ static void addPortalRoutesOnce() {
     }
   );
 
+  // ---------- Scan: return de-duped, RSSI-sorted names ----------
   server.on("/scan", HTTP_GET, [](AsyncWebServerRequest *request){
     int n = WiFi.scanComplete();
 
+    // Start async scan if not running yet
     if (n == -2) {
+      // async=true, show_hidden=true (passive=false keeps it quick)
       WiFi.scanNetworks(true, true);
     }
 
@@ -442,9 +474,10 @@ static void addPortalRoutesOnce() {
       std::vector<Net> nets;
       nets.reserve(n);
 
+      // Build unique set by SSID, keep strongest RSSI
       for (int i = 0; i < n; ++i) {
         String name = WiFi.SSID(i);
-        if (!name.length()) continue;
+        if (!name.length()) continue; // ignore hidden/empty SSIDs
         int32_t rssi = WiFi.RSSI(i);
 
         bool merged = false;
@@ -458,6 +491,7 @@ static void addPortalRoutesOnce() {
         if (!merged) nets.push_back({name, rssi});
       }
 
+      // sort by strongest first
       std::sort(nets.begin(), nets.end(), [](const Net& a, const Net& b){ return a.rssi > b.rssi; });
 
       lastScanResults.clear();
@@ -465,9 +499,11 @@ static void addPortalRoutesOnce() {
       for (auto &it : nets) lastScanResults.push_back(it.name);
 
       WiFi.scanDelete();
+      // Immediately kick off a new async scan so results stay fresh
       WiFi.scanNetworks(true, true);
     }
 
+    // Return cached (or just-updated) names only
     String json = "[";
     for (size_t i=0; i<lastScanResults.size(); ++i) {
       if (i) json += ",";
@@ -479,6 +515,7 @@ static void addPortalRoutesOnce() {
     request->send(resp);
   });
 
+  // ---------- Forget ----------
   server.on("/forget", HTTP_GET, [](AsyncWebServerRequest *request){
     clearCreds();
     ssid = ""; password = "";
@@ -489,6 +526,7 @@ static void addPortalRoutesOnce() {
     request->send(resp);
   });
 
+  // ---------- Captive portal helpers ----------
   auto cp = [](AsyncWebServerRequest *r){
     AsyncWebServerResponse* resp = r->beginResponse(200, "text/html", "<meta http-equiv='refresh' content='0; url=/' />");
     resp->addHeader("Cache-Control", "no-store");
@@ -501,173 +539,204 @@ static void addPortalRoutesOnce() {
   server.on("/captiveportal", HTTP_GET, cp);
   server.onNotFound(cp);
 
+  // No caching for UI/API
   DefaultHeaders::Instance().addHeader("Cache-Control", "no-store");
+
+  // (Optional) Gentle placeholder so /files won't 404 before fileman registers:
+  server.on("/files", HTTP_GET, [](AsyncWebServerRequest* req){
+    req->send(200, "text/plain",
+              "File Manager will be available once fileman.cpp registers its routes here.");
+  });
 }
 
 static void startPortal() {
+  Serial.println("[WiFiMgr] Starting portal mode");
+  
+  // Clear any existing connection
   WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
   delay(100);
+  
+  // Set up dual mode for AP + scanning
+  WiFi.mode(WIFI_AP_STA);
   setAPConfig();
-  WiFi.mode(WIFI_AP_STA);  // AP+STA so scan works while in portal
-  delay(100);
-
+  
+  // Conservative TX power for dual mode  
+  esp_wifi_set_max_tx_power(60);  // 15dBm instead of 20
+  
   bool apok = WiFi.softAP("X-Sound Setup", "", 6, 0);
-  esp_wifi_set_max_tx_power(20);
-  LedStat::setStatus(LedStatus::Portal);
   Serial.printf("[WiFiMgr] softAP=%d, IP: %s\n", apok, WiFi.softAPIP().toString().c_str());
-  delay(200);
-
+  
+  delay(500);  // Give AP more time to stabilize
+  
+  LedStat::setStatus(LedStatus::Portal);
+  
   IPAddress apIP = WiFi.softAPIP();
   dnsServer.start(53, "*", apIP);
-  dnsActive = true;
 
+  // Register routes and start server if needed
   addPortalRoutesOnce();
-  server.begin();
+  if (!serverStarted) {
+    server.begin();
+    serverStarted = true;
+    Serial.println("[WiFiMgr] Web server started");
+  }
+  
   state = State::PORTAL;
 
+  // Start scan after AP is stable
   WiFi.scanNetworks(true, true);
 }
 
 static void stopPortal() {
   dnsServer.stop();
-  dnsActive = false;
+  // Don't stop server - keep it running for /files etc
 }
 
 static void tryConnect() {
   if (ssid.length() > 0) {
-    WiFi.mode(WIFI_AP_STA);
+    Serial.printf("[WiFiMgr] Attempting to connect to: %s\n", ssid.c_str());
+    
+    // Use STA-only mode for connection
+    WiFi.mode(WIFI_STA);
     delay(100);
+    
     WiFi.begin(ssid.c_str(), password.c_str());
     state = State::CONNECTING;
-    connectAttempts = 1;
+    connectAttempts = 0;
     lastAttempt = millis();
-    nextReconnectAt = millis();
   } else {
     startPortal();
   }
 }
 
-static void scheduleReconnect(bool immediate) {
-  if (!ssid.length()) {
+// ---------------- Public API ----------------
+void begin() {
+  Serial.println("[WiFiMgr] Initializing...");
+  LedStat::setStatus(LedStatus::Booting);
+  
+  // ESP32-S3 specific WiFi configuration
+  WiFi.setSleep(false);  // Disable WiFi sleep for reliability
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(false);  // Don't save credentials to flash each time
+  
+#ifdef CONFIG_IDF_TARGET_ESP32S3
+  // Set minimum auth mode for better compatibility
+  wifi_config_t current_conf;
+  esp_wifi_get_config(WIFI_IF_STA, &current_conf);
+  current_conf.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+  esp_wifi_set_config(WIFI_IF_STA, &current_conf);
+#endif
+
+  loadCreds();
+  
+  if (ssid.length() > 0) {
+    // Try STA-only mode first for saved credentials
+    Serial.println("[WiFiMgr] Found saved credentials, attempting connection...");
+    tryConnect();
+  } else {
+    // No credentials, start portal
+    Serial.println("[WiFiMgr] No saved credentials, starting portal...");
     startPortal();
-    return;
   }
-  state = State::CONNECTING;
-  connectAttempts = 1;
-  nextReconnectAt = immediate ? 0 : (millis() + backoffMs);
-
-  if (backoffMs < backoffMax) {
-    backoffMs = (backoffMs < backoffMax/2) ? (backoffMs * 2) : backoffMax;
-  }
-
-  WiFi.disconnect();
-  WiFi.begin(ssid.c_str(), password.c_str());
-  lastAttempt = millis();
-  Serial.printf("[WiFiMgr] Reconnect scheduled (backoff now %lums)\n", backoffMs);
 }
 
-static void onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
-  switch (event) {
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
-      Serial.printf("[WiFiMgr] STA disconnected (reason=%d)\n", (int)info.wifi_sta_disconnected.reason);
-      if (!dnsActive) {
-        dnsServer.start(53, "*", WiFi.softAPIP());
-        dnsActive = true;
+void loop() {
+  // Always process DNS requests if portal is active
+  if (state == State::PORTAL) {
+    dnsServer.processNextRequest();
+  }
+
+  switch (state) {
+    case State::CONNECTING: {
+      if (WiFi.status() == WL_CONNECTED) {
+        state = State::CONNECTED;
+        stopPortal();  // Stop DNS server
+        
+        Serial.println("[WiFiMgr] WiFi connected!");
+        Serial.print("[WiFiMgr] IP Address: ");
+        Serial.println(WiFi.localIP());
+        Serial.printf("[WiFiMgr] RSSI: %d dBm\n", WiFi.RSSI());
+        
+        LedStat::setStatus(LedStatus::WifiConnected);
+        
+        // Ensure web server is accessible
+        if (!serverStarted) {
+          addPortalRoutesOnce();
+          server.begin();
+          serverStarted = true;
+        }
+      } else if (millis() - lastAttempt > retryDelay) {
+        connectAttempts++;
+        Serial.printf("[WiFiMgr] Connection attempt %d/%d\n", connectAttempts, maxAttempts);
+        
+        if (connectAttempts >= maxAttempts) {
+          Serial.println("[WiFiMgr] Max connection attempts reached, starting portal");
+          state = State::PORTAL;
+          startPortal();
+          LedStat::setStatus(LedStatus::WifiFailed);
+        } else {
+          // Retry connection
+          lastAttempt = millis();
+        }
       }
-      scheduleReconnect(false);
-      LedStat::setStatus(LedStatus::WifiFailed);
-    } break;
-
-    case ARDUINO_EVENT_WIFI_STA_GOT_IP: {
-      Serial.printf("[WiFiMgr] Got IP: %s\n", WiFi.localIP().toString().c_str());
-      state = State::CONNECTED;
-      stopPortal();                 // stop DNS when we have IP (AP remains up)
-      LedStat::setStatus(LedStatus::WifiConnected);
-      backoffMs = 2000;             // reset backoff on success
-    } break;
-
+      break;
+    }
+    
+    case State::CONNECTED: {
+      // Monitor connection and reconnect if lost
+      if (WiFi.status() != WL_CONNECTED) {
+        Serial.println("[WiFiMgr] Lost connection, attempting reconnect...");
+        state = State::CONNECTING;
+        connectAttempts = 0;
+        lastAttempt = millis();
+        WiFi.begin(ssid.c_str(), password.c_str());
+        LedStat::setStatus(LedStatus::Booting);
+      }
+      break;
+    }
+    
+    case State::PORTAL: {
+      // Portal mode - nothing special to do
+      break;
+    }
+    
+    case State::IDLE:
     default:
       break;
   }
 }
 
-// ---------------- Public API ----------------
-void begin() {
-  LedStat::setStatus(LedStatus::Booting);
-
-  WiFi.persistent(false);
-  WiFi.setAutoReconnect(true);
-  WiFi.onEvent(onWiFiEvent);
-
-  loadCreds();
-  startPortal();    // always start captive portal
-  if (ssid.length() > 0) {
-    tryConnect();   // attempt STA connect in background
-  }
-}
-
-void loop() {
-  if (dnsActive) {
-    dnsServer.processNextRequest();
-  }
-
-  if (state == State::CONNECTED && WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFiMgr] Lost connection, switching to CONNECTING.");
-    if (!dnsActive) {
-      dnsServer.start(53, "*", WiFi.softAPIP());
-      dnsActive = true;
-    }
-    scheduleReconnect(false);
-  }
-
-  if (state == State::CONNECTING) {
-    const bool stillDown = (WiFi.status() != WL_CONNECTED);
-
-    if (stillDown) {
-      if (millis() - lastAttempt > retryDelay) {
-        connectAttempts++;
-        if (connectAttempts >= maxAttempts) {
-          state = State::PORTAL;
-          startPortal();
-          LedStat::setStatus(LedStatus::WifiFailed);
-          Serial.println("[WiFiMgr] Max attempts reached; returning to portal.");
-        } else {
-          WiFi.disconnect();
-          WiFi.begin(ssid.c_str(), password.c_str());
-          lastAttempt = millis();
-          Serial.printf("[WiFiMgr] Retry %d/%d\n", connectAttempts, maxAttempts);
-        }
-      }
-
-      if (millis() >= nextReconnectAt) {
-        WiFi.disconnect();
-        WiFi.begin(ssid.c_str(), password.c_str());
-        lastAttempt = millis();
-        nextReconnectAt = millis() + backoffMs;
-        if (backoffMs < backoffMax) {
-          backoffMs = (backoffMs < backoffMax/2) ? (backoffMs * 2) : backoffMax;
-        }
-      }
-    }
-  }
-}
-
 void restartPortal() {
+  Serial.println("[WiFiMgr] Manual portal restart requested");
+  state = State::PORTAL;
   startPortal();
 }
 
 void forgetWiFi() {
+  Serial.println("[WiFiMgr] Forgetting WiFi credentials");
   clearCreds();
+  ssid = "";
+  password = "";
+  WiFi.disconnect(true);
+  state = State::PORTAL;
   startPortal();
 }
 
 bool isConnected() {
-  return WiFi.status() == WL_CONNECTED;
+  return (state == State::CONNECTED && WiFi.status() == WL_CONNECTED);
 }
 
 String getStatus() {
-  if (isConnected()) return "Connected to: " + ssid;
-  if (state == State::CONNECTING) return "Connecting to: " + ssid;
+  if (isConnected()) {
+    return "Connected to: " + ssid + " (IP: " + WiFi.localIP().toString() + ")";
+  }
+  if (state == State::CONNECTING) {
+    return "Connecting to: " + ssid + " (attempt " + String(connectAttempts) + "/" + String(maxAttempts) + ")";
+  }
+  if (state == State::PORTAL) {
+    return "Portal mode active";
+  }
   return "Not connected";
 }
 

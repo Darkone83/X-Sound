@@ -328,42 +328,6 @@ function stopPlay(){
   }).catch(()=>setStatus('Stop failed (network).'));
 }
 
-function toggleBoot(){
-  const btn = document.getElementById('bootBtn');
-  const next = btn.dataset.next || '0';
-  fetch('/api/boot_pref?enabled='+encodeURIComponent(next), {method:'POST'})
-    .then(r=>r.json()).then(j=>{
-      if (j.ok){
-        const on = !!j.enabled;
-        document.getElementById('bootState').textContent = on ? 'Enabled' : 'Disabled';
-        btn.textContent = on ? 'Disable Boot Sound' : 'Enable Boot Sound';
-        btn.dataset.next = on ? '0' : '1';
-        setStatus('Boot sound ' + (on ? 'enabled' : 'disabled') + '.');
-      } else {
-        setStatus('Failed to update boot sound setting.');
-      }
-    })
-    .catch(()=>setStatus('Failed to update boot sound setting (network).'));
-}
-
-function toggleEject(){
-  const btn = document.getElementById('ejectBtn');
-  const next = btn.dataset.next || '0';
-  fetch('/api/eject_pref?enabled='+encodeURIComponent(next), {method:'POST'})
-    .then(r=>r.json()).then(j=>{
-      if (j.ok){
-        const on = !!j.enabled;
-        document.getElementById('ejectState').textContent = on ? 'Enabled' : 'Disabled';
-        btn.textContent = on ? 'Disable Eject Sound' : 'Enable Eject Sound';
-        btn.dataset.next = on ? '0' : '1';
-        setStatus('Eject sound ' + (on ? 'enabled' : 'disabled') + '.');
-      } else {
-        setStatus('Failed to update eject sound setting.');
-      }
-    })
-    .catch(()=>setStatus('Failed to update eject sound setting (network).'));
-}
-
 refresh();
 </script>
 </body></html>
@@ -517,34 +481,40 @@ static void handleVolSet(AsyncWebServerRequest* req) {
 }
 
 // -------------- REST: play/stop --------------
+// NOTE: these now ENQUEUE commands so the audio decoder is only touched
+// from the Arduino loop task. This avoids cross-task heap races.
 static void handlePlay(AsyncWebServerRequest* req) {
   if (!req->hasParam("slot")) {
     req->send(400, "application/json", "{\"ok\":false,\"err\":\"slot param\"}");
     return;
   }
   String slot = req->getParam("slot")->value();
+  String path = slotToPath(slot);
+  if (!path.length()) {
+    req->send(400, "application/json", "{\"ok\":false,\"err\":\"bad slot\"}");
+    return;
+  }
 
   if (slot == "eject" && !g_ejectEnabled) {
     req->send(200, "application/json", "{\"ok\":false,\"err\":\"eject disabled\"}");
     return;
   }
 
-  bool ok = false;
-  if (slot == "boot")       ok = AudioPlayer::playBoot();
-  else if (slot == "eject") ok = AudioPlayer::playEject();
-
-  if (ok) {
-    LedStat::setStatus(LedStatus::Playing);
-    req->send(200, "application/json", "{\"ok\":true}");
-  } else {
-    LedStat::setStatus(LedStatus::Error);
-    req->send(404, "application/json", "{\"ok\":false}");
+  if (!SPIFFS.exists(path)) {
+    req->send(404, "application/json", "{\"ok\":false,\"err\":\"missing file\"}");
+    return;
   }
+
+  // Enqueue command for Audio task
+  if (slot == "boot")      AudioPlayer::enqueue(AudioPlayer::Cmd::PlayBoot);
+  else /* eject */         AudioPlayer::enqueue(AudioPlayer::Cmd::PlayEject);
+
+  // Reply immediately; actual start happens in AudioPlayer::loop()
+  req->send(200, "application/json", "{\"ok\":true}");
 }
 
 static void handleStop(AsyncWebServerRequest* req) {
-  AudioPlayer::stop();
-  LedStat::setStatus(LedStatus::WifiConnected);
+  AudioPlayer::enqueue(AudioPlayer::Cmd::Stop);
   req->send(200, "application/json", "{\"ok\":true}");
 }
 

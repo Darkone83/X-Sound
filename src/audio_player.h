@@ -1,24 +1,29 @@
 #pragma once
+
 #include <Arduino.h>
 
 namespace AudioPlayer {
 
-  // Call once at boot. Provide your I2S pins.
-  void begin(int bclkPin, int lrclkPin, int doutPin);
+// Commands processed by the main loop only.
+enum class Cmd : uint8_t { None = 0, PlayBoot, PlayEject, Stop };
 
-  // Call frequently from loop(); handles decoder loop and end-of-track cleanup.
-  void loop();
+// Init / lifecycle
+void begin(int bclkPin, int lrclkPin, int doutPin);
+void loop();
 
-  // Volume 0..255 (mapped to AudioOutputI2S gain)
-  void setVolume(uint8_t v);
-  uint8_t getVolume();
+// Volume
+void setVolume(uint8_t v);
+uint8_t getVolume();
 
-  // Control
-  bool playBoot();            // plays /boot.mp3 from SPIFFS
-  bool playEject();           // plays /eject.mp3 from SPIFFS
-  bool playFile(const char* path); // generic play by path
-  void stop();
+// Status
+bool isPlaying();
 
-  // State
-  bool isPlaying();
-}
+// Public API (now enqueue-based; immediate return)
+bool playBoot();
+bool playEject();
+bool stop();
+
+// Explicit enqueue if you prefer to call with a Cmd
+bool enqueue(Cmd c);
+
+} // namespace AudioPlayer
