@@ -18,6 +18,10 @@ uint8_t getVolume();
 // Status
 bool isPlaying();
 
+// Enable/disable sounds (synced with FileMan preferences)
+void setBootEnabled(bool enabled);
+void setEjectEnabled(bool enabled);
+
 // Public API (now enqueue-based; immediate return)
 bool playBoot();
 bool playEject();

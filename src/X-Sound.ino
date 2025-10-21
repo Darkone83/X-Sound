@@ -122,9 +122,9 @@ void setup() {
 }
 
 void loop() {
+  AudioPlayer::loop();
   WiFiMgr::loop();
   LedStat::loop();
-  AudioPlayer::loop();
 
   // EJECT handling with refire guard
   const unsigned long now = millis();

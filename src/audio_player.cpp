@@ -6,7 +6,7 @@
 #include <AudioGeneratorMP3.h>
 #include <AudioOutputI2S.h>
 
-#include "led_stat.h"   // For LedStatus::Playing / Error / WifiConnected
+#include "led_stat.h"
 
 // Default sound paths (match FileMan)
 static const char* kBootPath  = "/boot.mp3";
@@ -23,12 +23,14 @@ static int g_bclk = -1, g_lrck = -1, g_dout = -1;
 // Volume (0..255)
 static uint8_t g_vol = 200;
 
+// Enable flags for boot/eject sounds
+static bool g_bootEnabled = true;
+static bool g_ejectEnabled = true;
+
 // --- Single-threaded command handoff ---
-// HTTP handlers and other tasks only *set* this; the main loop consumes it.
 static volatile AudioPlayer::Cmd g_pendingCmd = AudioPlayer::Cmd::None;
 
 // Map 0..255 -> a linear-ish gain (0.0 .. ~1.0)
-// Keep conservative headroom to avoid clipping.
 static float volToGain(uint8_t v) {
   return (float)v * (1.0f / 255.0f);
 }
@@ -47,7 +49,6 @@ static void cleanupPlayer() {
 
 // Internal: start playback of a path (loop-thread only)
 static bool startPlayPath(const char* path) {
-  // Ensure any current playback is stopped on this thread
   cleanupPlayer();
 
   if (!SPIFFS.exists(path)) {
@@ -55,7 +56,6 @@ static bool startPlayPath(const char* path) {
     return false;
   }
 
-  // Allocate only here (never in HTTP callbacks)
   fileSrc = new AudioFileSourceFS(SPIFFS, path);
   if (!fileSrc) { LedStat::setStatus(LedStatus::Error); return false; }
 
@@ -79,18 +79,15 @@ namespace AudioPlayer {
 void begin(int bclkPin, int lrclkPin, int doutPin) {
   g_bclk = bclkPin; g_lrck = lrclkPin; g_dout = doutPin;
 
-  // Prepare SPIFFS if not already (safe if already mounted)
   SPIFFS.begin(true);
 
-  // Create output once; reuse across tracks
   out = new AudioOutputI2S();
   if (out) {
     out->SetPinout(g_bclk, g_lrck, g_dout);
-    out->SetChannels(1);            // mono
-    out->SetGain(volToGain(g_vol)); // initial gain
+    out->SetChannels(1);
+    out->SetGain(volToGain(g_vol));
   }
 
-  // Idle LED
   LedStat::setStatus(LedStatus::WifiConnected);
 }
 
@@ -105,9 +102,21 @@ bool isPlaying() {
   return (mp3 && mp3->isRunning());
 }
 
+// NEW: Set boot sound enabled state
+void setBootEnabled(bool enabled) {
+  g_bootEnabled = enabled;
+  Serial.printf("[AudioPlayer] Boot sound %s\n", enabled ? "ENABLED" : "DISABLED");
+}
+
+// NEW: Set eject sound enabled state
+void setEjectEnabled(bool enabled) {
+  g_ejectEnabled = enabled;
+  Serial.printf("[AudioPlayer] Eject sound %s\n", enabled ? "ENABLED" : "DISABLED");
+}
+
 // --- Command helpers: enqueue only; loop() does the work ---
 bool enqueue(Cmd c) {
-  g_pendingCmd = c;   // last command wins
+  g_pendingCmd = c;
   return true;
 }
 
@@ -118,9 +127,8 @@ bool stop()      { return enqueue(Cmd::Stop);     }
 // Main-thread pump
 void loop() {
   // 1) If currently playing, drive the decoder
-  if (mp3) {
+  if (mp3 && out && fileSrc) {
     if (!mp3->loop()) {
-      // Finished or error
       cleanupPlayer();
       LedStat::setStatus(LedStatus::WifiConnected);
     }
@@ -129,7 +137,6 @@ void loop() {
   // 2) Process exactly one pending command per loop tick (if any)
   AudioPlayer::Cmd cmd = g_pendingCmd;
   if (cmd != Cmd::None) {
-    // Consume it
     g_pendingCmd = Cmd::None;
 
     switch (cmd) {
@@ -139,14 +146,27 @@ void loop() {
         break;
       }
       case Cmd::PlayBoot: {
-        // If a track is playing, stop first (same thread, safe)
+        // CHECK: Only play if boot sound is enabled
+        if (!g_bootEnabled) {
+          Serial.println("[AudioPlayer] Boot sound disabled, skipping playback");
+          break;
+        }
         if (mp3) cleanupPlayer();
-        (void)startPlayPath(kBootPath);
+        if (out) {
+          (void)startPlayPath(kBootPath);
+        }
         break;
       }
       case Cmd::PlayEject: {
+        // CHECK: Only play if eject sound is enabled
+        if (!g_ejectEnabled) {
+          Serial.println("[AudioPlayer] Eject sound disabled, skipping playback");
+          break;
+        }
         if (mp3) cleanupPlayer();
-        (void)startPlayPath(kEjectPath);
+        if (out) {
+          (void)startPlayPath(kEjectPath);
+        }
         break;
       }
       case Cmd::None:

@@ -36,6 +36,7 @@ static void fmPrefsReadAll() {
 static void fmBootSoundWrite(bool en) {
   if (g_bootEnabled == en) return;
   g_bootEnabled = en;
+  AudioPlayer::setBootEnabled(en);  // Sync with audio player
   Preferences p;
   if (p.begin("xsound", /*ro=*/false)) {
     p.putBool("boot_enabled", en);
@@ -46,6 +47,7 @@ static void fmBootSoundWrite(bool en) {
 static void fmEjectSoundWrite(bool en) {
   if (g_ejectEnabled == en) return;
   g_ejectEnabled = en;
+  AudioPlayer::setEjectEnabled(en);  // Sync with audio player
   Preferences p;
   if (p.begin("xsound", /*ro=*/false)) {
     p.putBool("eject_enabled", en);
@@ -398,53 +400,98 @@ static void handleDelete(AsyncWebServerRequest* req) {
 static void handleUploadCompleted(AsyncWebServerRequest* request, bool ok, const char* errMsg) {
   String body = ok ? "{\"ok\":true}" : (String("{\"ok\":false,\"err\":\"") + (errMsg?errMsg:"fail") + "\"}");
   auto* resp = request->beginResponse(ok?200:400, "application/json", body);
-  addNoStore(resp);
+  resp->addHeader("Cache-Control", "no-store");
   request->send(resp);
 }
 
 static void handleUpload(AsyncWebServerRequest* request, String filename, size_t index, uint8_t* data, size_t len, bool final) {
   static File out;
-  static String path;
+  static String targetPath;
   static size_t written = 0;
   static bool ok = true;
   static String err;
 
   if (index == 0) {
-    ok = true; err = ""; written = 0; path = "";
-    if (!request->hasParam("slot")) { ok=false; err="slot param"; }
-    else {
+    ok = true; err = ""; written = 0; targetPath = "";
+    
+    // Get the slot (boot or eject)
+    if (!request->hasParam("slot")) { 
+      ok = false; 
+      err = "slot param"; 
+    } else {
       String slot = request->getParam("slot")->value();
-      path = slotToPath(slot);
-      if (!path.length()) { ok=false; err="bad slot"; }
+      targetPath = slotToPath(slot);
+      if (!targetPath.length()) { 
+        ok = false; 
+        err = "bad slot"; 
+      }
     }
-    String lower = filename; lower.toLowerCase();
-    if (ok && !lower.endsWith(".mp3")) { ok=false; err="only .mp3"; }
+    
+    // Check file extension - must be .mp3
+    String lower = filename; 
+    lower.toLowerCase();
+    if (ok && !lower.endsWith(".mp3")) { 
+      ok = false; 
+      err = "only .mp3 files allowed"; 
+    }
 
+    // Check available space
     if (ok) {
-      uint64_t total = SPIFFS.totalBytes(), used=SPIFFS.usedBytes();
-      if (total - used < (uint64_t)len + 4096) { ok=false; err="not enough space"; }
+      uint64_t total = SPIFFS.totalBytes();
+      uint64_t used = SPIFFS.usedBytes();
+      if (total - used < (uint64_t)len + 4096) { 
+        ok = false; 
+        err = "not enough space"; 
+      }
     }
+    
     if (ok) {
-      SPIFFS.remove(path);
-      out = SPIFFS.open(path, "w");
-      if (!out) { ok=false; err="open fail"; }
+      // Remove existing file at target path
+      if (SPIFFS.exists(targetPath)) {
+        SPIFFS.remove(targetPath);
+      }
+      
+      // Open file at TARGET path (e.g. /boot.mp3 or /eject.mp3)
+      // This automatically renames any uploaded file to the correct name
+      out = SPIFFS.open(targetPath, "w");
+      if (!out) { 
+        ok = false; 
+        err = "failed to create file"; 
+      } else {
+        Serial.printf("[FileMan] Uploading to: %s (original: %s)\n", 
+                     targetPath.c_str(), filename.c_str());
+      }
     }
   }
 
   if (ok && len) {
-    if (written + len > kMaxUploadBytes) { ok=false; err="file too large"; }
-    else if (out.write(data, len) != len) { ok=false; err="write fail"; }
-    else written += len;
+    if (written + len > kMaxUploadBytes) { 
+      ok = false; 
+      err = "file too large"; 
+    } else if (out.write(data, len) != len) { 
+      ok = false; 
+      err = "write failed"; 
+    } else {
+      written += len;
+    }
   }
 
   if (final) {
-    if (out) out.close();
-    handleUploadCompleted(request, ok, ok?nullptr:err.c_str());
-    path = ""; written = 0; ok = true; err="";
+    if (out) {
+      out.close();
+      if (ok) {
+        Serial.printf("[FileMan] Upload complete: %u bytes written to %s\n", 
+                     written, targetPath.c_str());
+      }
+    }
+    handleUploadCompleted(request, ok, ok ? nullptr : err.c_str());
+    targetPath = ""; 
+    written = 0; 
+    ok = true; 
+    err = "";
   }
 }
 
-// -------------- REST: volume --------------
 static void handleVolGet(AsyncWebServerRequest* req) {
   String body = String("{\"vol\":") + String((int)g_volume) + "}";
   auto* resp = req->beginResponse(200, "application/json", body);
@@ -495,8 +542,15 @@ static void handlePlay(AsyncWebServerRequest* req) {
     return;
   }
 
+  // CHECK: Boot sound enabled flag
+  if (slot == "boot" && !g_bootEnabled) {
+    req->send(200, "application/json", "{\"ok\":false,\"err\":\"boot sound disabled\"}");
+    return;
+  }
+
+  // CHECK: Eject sound enabled flag
   if (slot == "eject" && !g_ejectEnabled) {
-    req->send(200, "application/json", "{\"ok\":false,\"err\":\"eject disabled\"}");
+    req->send(200, "application/json", "{\"ok\":false,\"err\":\"eject sound disabled\"}");
     return;
   }
 
@@ -509,7 +563,6 @@ static void handlePlay(AsyncWebServerRequest* req) {
   if (slot == "boot")      AudioPlayer::enqueue(AudioPlayer::Cmd::PlayBoot);
   else /* eject */         AudioPlayer::enqueue(AudioPlayer::Cmd::PlayEject);
 
-  // Reply immediately; actual start happens in AudioPlayer::loop()
   req->send(200, "application/json", "{\"ok\":true}");
 }
 
@@ -596,10 +649,14 @@ namespace FileMan {
   void begin() {
     SPIFFS.begin(true);
 
-    // Load cached prefs once, then push volume to audio driver
+    // Load cached prefs once
     fmPrefsReadAll();
-    if (g_volume > 255) g_volume = 255; // sanity
+    if (g_volume > 255) g_volume = 255;
+    
+    // Sync all settings with AudioPlayer
     AudioPlayer::setVolume(g_volume);
+    AudioPlayer::setBootEnabled(g_bootEnabled);
+    AudioPlayer::setEjectEnabled(g_ejectEnabled);
 
     AsyncWebServer& server = WiFiMgr::getServer();
     registerRoutes(server);

@@ -23,13 +23,15 @@ enum class State { IDLE, CONNECTING, CONNECTED, PORTAL };
 static State state = State::IDLE;
 
 static int connectAttempts = 0;
-static const int maxAttempts = 20;  // Reduced from 50 for faster fallback
+static const int maxAttempts = 10;  // Reduced from 50 for faster fallback
 static unsigned long lastAttempt = 0;
 static unsigned long retryDelay = 3000;  // Increased from 2500ms
 
 // Ensure portal routes are only added once (so we don't need server.reset()).
 static bool portalRoutesAdded = false;
 static bool serverStarted = false;
+
+static bool dnsServerStarted = false;
 
 AsyncWebServer& getServer() {
   return server;
@@ -552,44 +554,88 @@ static void addPortalRoutesOnce() {
 static void startPortal() {
   Serial.println("[WiFiMgr] Starting portal mode");
   
-  // Clear any existing connection
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
+  // Only stop DNS if it was actually started
+  if (dnsServerStarted) {
+    Serial.println("[WiFiMgr] Stopping existing DNS server...");
+    dnsServer.stop();
+    dnsServerStarted = false;
+    delay(100);
+  }
+  
+  // Stop any ongoing scans
+  Serial.println("[WiFiMgr] Cleaning up scans...");
+  WiFi.scanDelete();
   delay(100);
   
-  // Set up dual mode for AP + scanning
+  // Disconnect cleanly
+  Serial.println("[WiFiMgr] Disconnecting WiFi...");
+  WiFi.disconnect(false);
+  delay(500);
+  
+  // Set AP_STA mode directly (don't use WIFI_OFF)
+  Serial.println("[WiFiMgr] Setting AP_STA mode...");
   WiFi.mode(WIFI_AP_STA);
+  delay(800);
+  
+  // Configure AP settings BEFORE starting it
+  Serial.println("[WiFiMgr] Configuring AP...");
   setAPConfig();
   
-  // Conservative TX power for dual mode  
-  esp_wifi_set_max_tx_power(60);  // 15dBm instead of 20
+  // Conservative TX power
+  esp_wifi_set_max_tx_power(60);
+  delay(100);
   
-  bool apok = WiFi.softAP("X-Sound Setup", "", 6, 0);
-  Serial.printf("[WiFiMgr] softAP=%d, IP: %s\n", apok, WiFi.softAPIP().toString().c_str());
+  // Start the AP
+  Serial.println("[WiFiMgr] Starting AP...");
+  bool apok = WiFi.softAP("X-Sound Setup", "", 6, 0, 4);
+  if (!apok) {
+    Serial.println("[WiFiMgr] ERROR: softAP failed!");
+    return;
+  }
   
-  delay(500);  // Give AP more time to stabilize
+  Serial.printf("[WiFiMgr] softAP started, IP: %s\n", WiFi.softAPIP().toString().c_str());
+  delay(1500);
   
   LedStat::setStatus(LedStatus::Portal);
   
+  // Only start DNS server AFTER AP is confirmed working
   IPAddress apIP = WiFi.softAPIP();
+  if (apIP == IPAddress(0, 0, 0, 0)) {
+    Serial.println("[WiFiMgr] ERROR: AP IP is 0.0.0.0!");
+    return;
+  }
+  
+  Serial.println("[WiFiMgr] Starting DNS server...");
   dnsServer.start(53, "*", apIP);
+  dnsServerStarted = true;  // Mark as started
+  delay(200);
 
-  // Register routes and start server if needed
+  // Register routes ONCE
+  Serial.println("[WiFiMgr] Adding portal routes...");
   addPortalRoutesOnce();
+  
+  // Start web server ONLY if not already started
   if (!serverStarted) {
+    Serial.println("[WiFiMgr] Starting web server...");
     server.begin();
     serverStarted = true;
-    Serial.println("[WiFiMgr] Web server started");
+    delay(200);
   }
   
   state = State::PORTAL;
+  Serial.println("[WiFiMgr] Portal mode ready");
 
-  // Start scan after AP is stable
+  // Start scan LAST, after everything else is stable
+  delay(500);
+  Serial.println("[WiFiMgr] Starting network scan...");
   WiFi.scanNetworks(true, true);
 }
 
 static void stopPortal() {
-  dnsServer.stop();
+  if (dnsServerStarted) {
+    dnsServer.stop();
+    dnsServerStarted = false;
+  }
   // Don't stop server - keep it running for /files etc
 }
 
@@ -668,13 +714,18 @@ void loop() {
         }
       } else if (millis() - lastAttempt > retryDelay) {
         connectAttempts++;
-        Serial.printf("[WiFiMgr] Connection attempt %d/%d\n", connectAttempts, maxAttempts);
+        Serial.printf("[WiFiMgr] Connection attempt %d/%d (WiFi status: %d)\n", 
+                      connectAttempts, maxAttempts, WiFi.status());
         
         if (connectAttempts >= maxAttempts) {
-          Serial.println("[WiFiMgr] Max connection attempts reached, starting portal");
+          Serial.println("[WiFiMgr] Max connection attempts reached, will start portal");
+          LedStat::setStatus(LedStatus::WifiFailed);
+          
+          // Give system a moment to stabilize before switching modes
+          delay(500);
+          
           state = State::PORTAL;
           startPortal();
-          LedStat::setStatus(LedStatus::WifiFailed);
         } else {
           // Retry connection
           lastAttempt = millis();
