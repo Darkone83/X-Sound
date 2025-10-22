@@ -6,11 +6,12 @@
 # X-Sound
 
 A compact ESP32-S3 project that adds **boot** and **eject** sounds to the **original Xbox**, blending classic hardware with modern web-managed sound control.  
+
 Designed and developed by **Darkone83 / Darkone Customs**.
 
 ---
 
-## ⚙️ Features (High-Level)
+## ⚙️ Features
 
 - **Boot & Eject Sound Playback**
   - Plays `/boot.mp3` automatically on power-up  
@@ -98,9 +99,7 @@ This section outlines the **recommended connection points** on the **original Xb
   Used as a logic reference and power-enable signal.
 
 - **EJECT Signal:**  
-  Tap the **EJECT line from the front panel connector (CN2 pin 5)** or the corresponding trace on the mainboard header.  
-  Connect this to **GPIO9** on the ESP32-S3 through a **100–220 kΩ series resistor**.  
-  The pin is configured with an internal pull-up, detecting an **active-LOW pulse** when the EJECT button is pressed.
+  Tap the **EJECT line from the front panel connector (CN2 pin 5)** or the corresponding trace on the mainboard header. 
 
 > 💡 Keep all wiring short and tidy. Use twisted pairs or shielded leads for audio and eject lines if possible to avoid interference.
 
