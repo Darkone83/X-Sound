@@ -30,6 +30,11 @@ Designed and developed by **Darkone83 / Darkone Customs**.
 
 ---
 
+## 💵 Purchase Options
+
+Full kit: <a href="https://www.darkonecustoms.com/store/p/x-sound">Darkone Customs</a>
+___
+
 ## 🧰 Build Overview
 
 1. Clone or open the project in **Arduino IDE**
