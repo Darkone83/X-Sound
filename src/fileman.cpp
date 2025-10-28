@@ -167,10 +167,10 @@ hr{border:none;height:1px;background:#333;margin:.8rem 0}
 
     <!-- Volume -->
     <div class="group">
-      <div class="kv"><strong>Volume</strong><span class="small">0–255</span></div>
+      <div class="kv"><strong>Volume</strong><span class="small">0–100%</span></div>
       <div class="sliderrow">
-        <input id="vol" type="range" min="0" max="255" step="1" value="200" oninput="onVolSlide(this.value)" onchange="commitVol(this.value)">
-        <div class="valuechip"><span id="volv">200</span></div>
+        <input id="vol" type="range" min="0" max="100" step="1" value="80" oninput="onVolSlide(this.value)" onchange="commitVol(this.value)">
+        <div class="valuechip"><span id="volv">80%</span></div>
       </div>
       <div class="note">Adjust output gain in real time. (Persistent)</div>
     </div>
@@ -250,10 +250,14 @@ function refresh(){
   }).catch(()=>setStatus('Failed to query storage.'));
 
   fetch('/api/vol',{cache:'no-store'}).then(r=>r.json()).then(j=>{
-    const v = (typeof j.vol==='number') ? j.vol : 200;
+    // prefer "percent" if present; else convert
+    let percent = (typeof j.percent === 'number') ? j.percent :
+                  (typeof j.vol === 'number') ? Math.round((j.vol/255)*100) : 80;
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
     const s = document.getElementById('vol');
     const vv= document.getElementById('volv');
-    s.value = v; vv.textContent = v;
+    s.value = percent; vv.textContent = percent + '%';
   }).catch(()=>0);
 
   fetch('/api/boot_pref',{cache:'no-store'}).then(r=>r.json()).then(j=>{
@@ -272,16 +276,19 @@ function refresh(){
 }
 
 function onVolSlide(v){
-  document.getElementById('volv').textContent = v;
+  document.getElementById('volv').textContent = v + '%';
 }
 
 let volCommitTimer = null;
 function commitVol(v){
+  const scaled = Math.round((v/100)*255);
   if (volCommitTimer) clearTimeout(volCommitTimer);
   volCommitTimer = setTimeout(()=>{
-    fetch('/api/vol?val='+encodeURIComponent(v), {method:'POST'})
+    fetch('/api/vol?val='+encodeURIComponent(scaled), {method:'POST'})
       .then(r=>r.json()).then(j=>{
-        setStatus(j.ok ? ('Volume set to '+j.vol) : ('Volume change failed'));
+        const p = (typeof j.percent==='number') ? j.percent :
+                  Math.round((j.vol/255)*100);
+        setStatus(j.ok ? ('Volume set to '+p+'%') : ('Volume change failed'));
       }).catch(()=>setStatus('Volume change failed (network).'));
   }, 120);
 }
@@ -328,6 +335,26 @@ function stopPlay(){
   fetch('/api/stop', {method:'POST'}).then(r=>r.json()).then(j=>{
     setStatus(j.ok ? 'Stopped.' : 'Stop failed.');
   }).catch(()=>setStatus('Stop failed (network).'));
+}
+
+function toggleBoot(){
+  const btn = document.getElementById('bootBtn');
+  const next = btn.dataset.next || '0';
+  fetch('/api/boot_pref?enabled='+encodeURIComponent(next), {method:'POST'})
+    .then(r=>r.json()).then(j=>{
+      if(j.ok){ setStatus('Boot sound '+(j.enabled?'enabled':'disabled')); refresh(); }
+      else setStatus('Failed to change boot setting');
+    }).catch(()=>setStatus('Network error'));
+}
+
+function toggleEject(){
+  const btn = document.getElementById('ejectBtn');
+  const next = btn.dataset.next || '0';
+  fetch('/api/eject_pref?enabled='+encodeURIComponent(next), {method:'POST'})
+    .then(r=>r.json()).then(j=>{
+      if(j.ok){ setStatus('Eject sound '+(j.enabled?'enabled':'disabled')); refresh(); }
+      else setStatus('Failed to change eject setting');
+    }).catch(()=>setStatus('Network error'));
 }
 
 refresh();
@@ -493,7 +520,11 @@ static void handleUpload(AsyncWebServerRequest* request, String filename, size_t
 }
 
 static void handleVolGet(AsyncWebServerRequest* req) {
-  String body = String("{\"vol\":") + String((int)g_volume) + "}";
+  int percent = (int)round((g_volume / 255.0f) * 100.0f);
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
+  String body = String("{\"vol\":") + String((int)g_volume) +
+                ",\"percent\":" + String(percent) + "}";
   auto* resp = req->beginResponse(200, "application/json", body);
   addNoStore(resp);
   req->send(resp);
@@ -501,6 +532,7 @@ static void handleVolGet(AsyncWebServerRequest* req) {
 
 static void handleVolSet(AsyncWebServerRequest* req) {
   // accept query (?val=), x-www-form-urlencoded (val), or JSON {"val":N}
+  // NOTE: val is still in RAW 0..255 units from the UI (we convert there)
   int vParsed = -1;
 
   if (req->hasParam("val")) {
@@ -521,7 +553,12 @@ static void handleVolSet(AsyncWebServerRequest* req) {
   AudioPlayer::setVolume((uint8_t)vParsed);
   fmVolumeWrite((uint8_t)vParsed);   // persist volume (throttled)
 
-  String body = String("{\"ok\":true,\"vol\":") + String(vParsed) + "}";
+  int percent = (int)round((vParsed / 255.0f) * 100.0f);
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
+
+  String body = String("{\"ok\":true,\"vol\":") + String(vParsed) +
+                ",\"percent\":" + String(percent) + "}";
   auto* resp = req->beginResponse(200, "application/json", body);
   addNoStore(resp);
   req->send(resp);

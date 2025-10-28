@@ -1,3 +1,4 @@
+// audio_player.cpp — updated to reflect real Wi-Fi status for idle LED
 #include "audio_player.h"
 
 #include <FS.h>
@@ -7,6 +8,7 @@
 #include <AudioOutputI2S.h>
 
 #include "led_stat.h"
+#include "wifimgr.h"   // NEW: query WiFiMgr::isConnected() for LED idle state
 
 // Default sound paths (match FileMan)
 static const char* kBootPath  = "/boot.mp3";
@@ -33,6 +35,15 @@ static volatile AudioPlayer::Cmd g_pendingCmd = AudioPlayer::Cmd::None;
 // Map 0..255 -> a linear-ish gain (0.0 .. ~1.0)
 static float volToGain(uint8_t v) {
   return (float)v * (1.0f / 255.0f);
+}
+
+// Helper: set idle LED based on Wi-Fi reality (connected → green, else portal purple)
+static void setIdleLedByWifi() {
+  if (WiFiMgr::isConnected()) {        // uses WiFiMgr public API
+    LedStat::setStatus(LedStatus::WifiConnected);
+  } else {
+    LedStat::setStatus(LedStatus::Portal);
+  }
 }
 
 // Internal: cleanup after stop/end/error (loop-thread only)
@@ -88,7 +99,8 @@ void begin(int bclkPin, int lrclkPin, int doutPin) {
     out->SetGain(volToGain(g_vol));
   }
 
-  LedStat::setStatus(LedStatus::WifiConnected);
+  // Old behavior hard-set WifiConnected here. Now we reflect actual status:
+  setIdleLedByWifi();  // ✔ only green if Wi-Fi really connected, else portal purple
 }
 
 void setVolume(uint8_t v) {
@@ -102,13 +114,13 @@ bool isPlaying() {
   return (mp3 && mp3->isRunning());
 }
 
-// NEW: Set boot sound enabled state
+// Set boot sound enabled state (synced from FileMan)
 void setBootEnabled(bool enabled) {
   g_bootEnabled = enabled;
   Serial.printf("[AudioPlayer] Boot sound %s\n", enabled ? "ENABLED" : "DISABLED");
 }
 
-// NEW: Set eject sound enabled state
+// Set eject sound enabled state (synced from FileMan)
 void setEjectEnabled(bool enabled) {
   g_ejectEnabled = enabled;
   Serial.printf("[AudioPlayer] Eject sound %s\n", enabled ? "ENABLED" : "DISABLED");
@@ -130,7 +142,7 @@ void loop() {
   if (mp3 && out && fileSrc) {
     if (!mp3->loop()) {
       cleanupPlayer();
-      LedStat::setStatus(LedStatus::WifiConnected);
+      setIdleLedByWifi();  // ✔ when playback ends, reflect current Wi-Fi status
     }
   }
 
@@ -142,11 +154,10 @@ void loop() {
     switch (cmd) {
       case Cmd::Stop: {
         cleanupPlayer();
-        LedStat::setStatus(LedStatus::WifiConnected);
+        setIdleLedByWifi();  // ✔ stopping returns to real Wi-Fi status
         break;
       }
       case Cmd::PlayBoot: {
-        // CHECK: Only play if boot sound is enabled
         if (!g_bootEnabled) {
           Serial.println("[AudioPlayer] Boot sound disabled, skipping playback");
           break;
@@ -158,7 +169,6 @@ void loop() {
         break;
       }
       case Cmd::PlayEject: {
-        // CHECK: Only play if eject sound is enabled
         if (!g_ejectEnabled) {
           Serial.println("[AudioPlayer] Eject sound disabled, skipping playback");
           break;
