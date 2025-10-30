@@ -147,7 +147,7 @@ Keep your wires short and neat. Twisted pairs help reduce interference if you're
 
 ## Credits
 
-**Concept:** Darkone83 / LD50 II
+**Concept:** Darkone83 / LD50 II   
 **Hardware design:** Darkone83  
 **Firmware:** Darkone83  
 **Libraries we couldn't live without:**
