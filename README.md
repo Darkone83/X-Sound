@@ -87,9 +87,6 @@ ___
 | 4 | GND |
 | 5 | EJECT (Active LOW) |
 
-> **EJECT** connected to **GPIO9** with `INPUT_PULLUP`.  
-> **Optional** Add a **100–220 kΩ series resistor** on the tap for safety.
-
 ---
 
 ## 🧷 Hardware Installation (Overview)
@@ -99,7 +96,7 @@ ___
 This section outlines the **recommended connection points** on the **original Xbox motherboard** for integrating the X-Sound module.
 
 - **Ground (GND):**  
-  Tap any reliable chassis or board ground. Common choices include the **metal shielding**, **DVD power connector ground**, or **front panel ground pins**.
+  Tap any reliable chassis or board ground. Common choices include the **metal shielding**, **DVD power connector ground**, or **front panel ground pins**. Recommended grounf point is on the LPC header.
 
 - **5V (Power Input):**  
   Pull from the **LPC** or from the **DVD power plug 5V line**.  
@@ -142,13 +139,14 @@ This section outlines the **recommended connection points** on the **original Xb
 | **Distortion** | Lower volume or re-encode audio as 44.1 kHz mono @128 kbps |
 | **Eject not working** | Check GPIO9 pull-up and Xbox signal polarity |
 | **Fast blinking red LED** | Error with file playback, ensure file is the proper format (MP3 **96 - 128kpbs** 44.1kHz mono under 30s) |
+| **No power** | Check 3.3v conenction to the X-Sound. If 3.3v is not present, the device will not boot |
 
 ---
 
 ## 🪙 Credits
 
-**Hardware & Concept:** Darkone83 — *Darkone Customs*  
-**Firmware:** Darkone83 — *Darkone Customs*  
+**Hardware & Concept:** Darkone83 — *Darkone83 / LD50*  
+**Firmware:** Darkone83 — *Darkone83*  
 **Libraries:**  
 - ESP8266Audio — Earle Philhower  
 - ESP Async WebServer / AsyncTCP — me-no-dev  
