@@ -3,6 +3,11 @@
   <img src="images/DC logo.png" width="180"/>
 </p>
 
+
+<p align="center">
+  <img src="https://github.com/Darkone83/X-Sound/blob/main/images/X-Sound.jpg">
+</p>
+
 # X-Sound
 
 A compact ESP32-S3 project that adds **boot** and **eject** sounds to the **original Xbox**, blending classic hardware with modern web-managed sound control.  
