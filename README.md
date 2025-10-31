@@ -10,7 +10,7 @@
 
 # X-Sound
 
-Ever wanted an Xbox startup sound? X-Sound brings it back with a compact ESP32-S3 module that adds custom **boot** and **eject** sounds to your original Xbox. No more silent power-ups – now you get that nostalgic audio experience with modern web-based control.
+Ever wanted an Xbox startup sound? X-Sound brings it to the OG XBOX, with a compact ESP32-S3 module that adds custom **boot** and **eject** sounds to your original Xbox. No more silent power-ups – now you get that nostalgic audio experience with modern web-based control.
 
 Built by **Darkone83 / Darkone Customs**.
 
