@@ -3,57 +3,76 @@
   <img src="images/DC logo.png" width="180"/>
 </p>
 
+
+<p align="center">
+  <img src="https://github.com/Darkone83/X-Sound/blob/main/images/X-Sound.jpg">
+</p>
+
 # X-Sound
 
-A compact ESP32-S3 project that adds **boot** and **eject** sounds to the **original Xbox**, blending classic hardware with modern web-managed sound control.  
+Ever wanted an Xbox startup sound? X-Sound brings it to the OG XBOX, with a compact ESP32-S3 module that adds custom **boot** and **eject** sounds to your original Xbox. No more silent power-ups – now you get that nostalgic audio experience with modern web-based control.
 
-Designed and developed by **Darkone83 / Darkone Customs**.
-
----
-
-## ⚙️ Features
-
-- **Boot & Eject Sound Playback**
-  - Plays `/boot.mp3` automatically on power-up  
-  - Plays `/eject.mp3` when the Xbox eject line is triggered
-  - .mp3 should be encoded between **98 - 128kbps**, in 44.1kHz and in mono (keep sounds under 30s)
-- **Web-Based File Manager**
-  - Upload, delete, and play audio files via browser  
-  - Built-in **volume slider** and playback test buttons
-- **Automatic Wi-Fi Manager**
-  - Captive portal for first-time setup  
-  - Saves credentials for auto-reconnect
-- **mDNS Access**
-  - Reachable via **`http://xsound.local`**
-- **Clean Power Handling**
-  - 5 V switched only when 3.3 V rail is active
+Built by **Darkone83 / Darkone Customs**.
 
 ---
 
-## 🧰 Build Overview
+## What it does
 
-1. Clone or open the project in **Arduino IDE**
-2. Install all **required libraries** (see below)
-3. Select correct **board settings** for ESP32-S3 Zero
-4. Upload the sketch (`X-Sound.ino`)
-5. Connect to Wi-Fi network **`X-Sound-Setup`**
-6. Configure your home Wi-Fi through the setup page
-7. After reboot, visit **`http://xsound.local`**
-8. Open **File Manager** → upload `boot.mp3` and `eject.mp3`
+**Plays the sounds you remember**
+- Triggers `/boot.mp3` automatically when you power on
+- Plays `/eject.mp3` when you hit the eject button
+- Works with .mp3 files (98-128kbps, 44.1kHz mono, keep them under 30 seconds)
+
+**Easy file management through your browser**
+- Upload, delete, and test audio files from any device on your network
+- Built-in volume control and playback testing
+- No need to fiddle with SD cards or complex file transfers
+
+**Smart Wi-Fi setup**
+- First boot creates a setup network you connect to
+- Configure once, then it automatically connects to your home Wi-Fi
+- Access everything at `http://xsound.local`
+
+**Clean installation**
+- Uses Xbox's own 3.3V rail to control power switching
+- Only draws power when your Xbox is actually on
 
 ---
 
-## 📦 Required Libraries
+## Get one
 
-- **ESP Async WebServer** (me-no-dev)  
-- **AsyncTCP** (me-no-dev)  
-- **ESP8266Audio** (Earle Philhower)  
-
-> Ensure you’re using `AudioFileSourceFS` (not `AudioFileSourceSPIFFS`) for ESP32 compatibility.
+Full kit available at: <a href="https://www.darkonecustoms.com/store/p/x-sound">Darkone Customs</a>
 
 ---
 
-## 🧩 Board Settings (Arduino IDE)
+## Building the firmware
+
+Want to customize or build your own? Here's what you need:
+
+1. Grab the project files and open in Arduino IDE
+2. Install the libraries listed below
+3. Set up your board configuration (see settings table)
+4. Upload `X-Sound.ino` to your ESP32-S3
+5. Connect to the `X-Sound-Setup` network that appears
+6. Enter your home Wi-Fi details
+7. Once it reboots, go to `http://xsound.local`
+8. Upload your `boot.mp3` and `eject.mp3` files
+
+---
+
+## Libraries you'll need
+
+Install these through the Arduino IDE Library Manager:
+
+- **ESP Async WebServer** (me-no-dev)
+- **AsyncTCP** (me-no-dev)
+- **ESP8266Audio** (Earle Philhower)
+
+> Note: Make sure you're using `AudioFileSourceFS` instead of `AudioFileSourceSPIFFS` for ESP32 compatibility.
+
+---
+
+## Arduino IDE setup
 
 | Setting | Value |
 |----------|-------|
@@ -66,86 +85,78 @@ Designed and developed by **Darkone83 / Darkone Customs**.
 
 ---
 
-## 🪛 Pinout Reference
+## Connecting to your Xbox
 
-### Xbox Connector (CN2)
-| Pin | Signal |
+### Xbox connector pinout (CN2)
+| Pin | What it is |
 |------|--------|
 | 1 | 5V |
 | 2 | GND |
-| 3 | X3V3 (3.3 V Detect) |
+| 3 | X3V3 (3.3V detection) |
 | 4 | GND |
-| 5 | EJECT (Active LOW) |
-
-> **EJECT** connected to **GPIO9** with `INPUT_PULLUP`.  
-> **Optional** Add a **100–220 kΩ series resistor** on the tap for safety.
+| 5 | EJECT (goes low when pressed) |
 
 ---
 
-## 🧷 Hardware Installation (Overview)
+## Installation points
 
-> ⚠️ *Disconnect your Xbox from power before installation.*
+> ⚠️ **Unplug your Xbox first!**
 
-This section outlines the **recommended connection points** on the **original Xbox motherboard** for integrating the X-Sound module.
+Here's where to tap into your Xbox motherboard:
 
-- **Ground (GND):**  
-  Tap any reliable chassis or board ground. Common choices include the **metal shielding**, **DVD power connector ground**, or **front panel ground pins**.
+**Ground (GND):** Any solid ground point works. The LPC header ground is convenient, or you can use the metal shielding or DVD connector ground.
 
-- **5V (Power Input):**  
-  Pull from the **LPC** or from the **DVD power plug 5V line**.  
+**5V:** Grab this from the LPC connector or the DVD power plug's 5V line.
 
-- **3.3V (Sense/Enable):**  
-  Connect to the **3.3V rail** present on the LPC connector (CN2 pin 3).  
-  Used as a logic reference and power-enable signal.
+**3.3V:** Connect to the 3.3V rail on the LPC connector (pin 3). This tells X-Sound when your Xbox is actually powered up.
 
-- **EJECT Signal:**  
-  Tap the **EJECT line from the front panel connector (CN2 pin 5)** or the corresponding trace on the mainboard header. 
+**EJECT:** Tap into the eject signal from the front panel connector or find the trace on the mainboard.
 
-> 💡 Keep all wiring short and tidy. Use twisted pairs or shielded leads for audio and eject lines if possible to avoid interference.
+Keep your wires short and neat. Twisted pairs help reduce interference if you're having audio issues.
 
 ---
 
-## 🌐 Wi-Fi Setup & File Manager Access
+## Getting connected
 
-1. **First Boot:**  
-   - Device starts in **Access Point mode** as `X-Sound-Setup`.  
-   - Connect using your phone or PC.
+**First time setup:**
+1. Power up and look for the `X-Sound-Setup` Wi-Fi network
+2. Connect with your phone or computer
+3. The setup page should open automatically (or go to `192.168.4.1`)
+4. Enter your home Wi-Fi name and password
+5. Hit save and wait for it to reboot
 
-2. **Configuration Page:**  
-   - Page opens automatically (or visit `192.168.4.1`).  
-   - Enter your Wi-Fi SSID & password, then save.  
-   - Device reboots and joins your network.
-
-3. **Access Device:**  
-   - Visit **`http://xsound.local`** (or check router IP).  
-   - Use the **File Manager** to upload, delete, or test audio.  
-   - Adjust **Volume** with the slider.
+**Normal use:**
+- Visit `http://xsound.local` from any device on your network
+- Use the File Manager to upload your sounds
+- Test playback and adjust volume as needed
 
 ---
 
-## 🔧 Troubleshooting (Quick)
+## When things go wrong
 
-| Issue | Solution |
+| Problem | Try this |
 |-------|-----------|
-| **No web page** | Retry `http://xsound.local` or check LED status — Green = Wi-Fi connected, Red = no Wi-Fi |
-| **No audio** | Verify `/boot.mp3` & `/eject.mp3` exist and are valid MP3s |
-| **Distortion** | Lower volume or re-encode audio as 44.1 kHz mono @128 kbps |
-| **Eject not working** | Check GPIO9 pull-up and Xbox signal polarity |
-| **Fast blinking red LED** | Error with file playback, ensure file is the proper format (MP3 **96 - 128kpbs** 44.1kHz mono under 30s) |
+| **Can't reach the web page** | Check that you're going to `xsound.local` and look at the LED: Green = connected, Red = no Wi-Fi |
+| **No sound plays** | Make sure you have `/boot.mp3` and `/eject.mp3` uploaded and they're proper MP3 files |
+| **Audio sounds terrible** | Turn down the volume or re-encode your files as 44.1kHz mono at 128kbps |
+| **Eject button doesn't work** | Double-check your GPIO9 connection and make sure the Xbox signal is wired correctly |
+| **LED blinks red rapidly** | File playback error - check that your MP3 is 96-128kbps, 44.1kHz mono, under 30 seconds |
+| **Won't power on at all** | Verify the 3.3V connection. Without it, X-Sound won't boot |
 
 ---
 
-## 🪙 Credits
+## Credits
 
-**Hardware & Concept:** Darkone83 — *Darkone Customs*  
-**Firmware:** Darkone83 — *Darkone Customs*  
-**Libraries:**  
-- ESP8266Audio — Earle Philhower  
-- ESP Async WebServer / AsyncTCP — me-no-dev  
+**Concept:** Darkone83 / LD50 II   
+**Hardware design:** Darkone83  
+**Firmware:** Darkone83  
+**Libraries we couldn't live without:**
+- ESP8266Audio by Earle Philhower
+- ESP Async WebServer / AsyncTCP by me-no-dev
 
 ---
 
-## 🧭 Hardware Overview
+## How it all works
 
 ```
 ┌────────────────────────────────────────────────────┐
@@ -176,5 +187,5 @@ This section outlines the **recommended connection points** on the **original Xb
 
 ---
 
-**X-Sound** — Bringing the *original Xbox* startup feel back to life.  
+**X-Sound** — Because your Xbox deserves to sound as good as it looks.  
 © 2025 **Darkone83 / Darkone Customs**
