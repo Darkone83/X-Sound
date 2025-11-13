@@ -1,21 +1,47 @@
-MIT License
-
-Copyright (c) 2025 Darkone83
+MIT License + Hardware & Branding Addendum
+Copyright (c) 2025 Darkone83 / Darkone Customs
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
+of this software, firmware, or associated documentation files (the "Software"),
+and associated hardware design files (schematics, PCB layouts, 3D models,
+mechanical drawings, or any derivative works thereof) (the "Hardware"),
+to deal in the Software and Hardware without restriction, including without
+limitation the rights to use, copy, modify, merge, publish, distribute,
+sublicense, and/or sell copies of the Software and Hardware, subject to the
+following conditions:
 
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
+1. Branding & Credit Requirements
+   --------------------------------
+   • All branding, attribution markings, silkscreens, embedded artwork,
+     logos, or text referencing “Darkone83”, “Darkone Customs”, “Team Resurgent”,
+     or associated project names MAY NOT be removed from the Hardware files
+     or any manufactured derivative.
+   • Any redistribution, fork, derivative, or commercial use of the Software
+     or Hardware MUST retain clear credit to:
+       "Original Design by Darkone83 / Darkone Customs"
+   • Branding may not be replaced, hidden, altered, or minimized in a way that
+     obscures authorship.
+   • Additional branding MAY be added by derivative creators, provided the
+     original branding remains clearly visible and intact.
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
+2. License Notices
+   -----------------
+   • All copies or substantial portions of the Software or Hardware must include
+     this license text unmodified.
+   • For derivative hardware works, the license must accompany all manufacturing
+     files (Gerbers, KiCad, Eagle, Altium, etc.).
+
+3. Warranty
+   ----------
+   THE SOFTWARE AND HARDWARE ARE PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+   EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+   MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
+   IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+   DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+   OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR
+   HARDWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE OR HARDWARE.
+
+This license applies to both the firmware and the hardware of the X-Sound project,
+including (but not limited to) design files, schematics, PCB layouts, graphics,
+logos, and embedded branding.
+
