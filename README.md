@@ -49,6 +49,8 @@ Full kit available at: <a href="https://www.darkonecustoms.com/store/p/x-sound">
 
 ## Building the firmware
 
+#### Web Flasher: [![Type D Web Flasher](https://img.shields.io/badge/Web%20Flasher-Type%20D-green?logo=esp32&logoColor=white)](https://darkone83.github.io/X-Sound.github.io/)
+
 Want to customize or build your own? Here's what you need:
 
 1. Grab the project files and open in Arduino IDE
