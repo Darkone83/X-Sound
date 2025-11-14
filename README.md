@@ -49,7 +49,7 @@ Full kit available at: <a href="https://www.darkonecustoms.com/store/p/x-sound">
 
 ## Building the firmware
 
-#### Web Flasher: [![Type D Web Flasher](https://img.shields.io/badge/Web%20Flasher-X%E2%80%93Sound-green?logo=esp32&logoColor=white)](https://darkone83.github.io/X-Sound.github.io/)
+#### Web Flasher: [![Type D Web Flasher](https://img.shields.io/badge/Web%20Flasher-X%E2%80%93Sound-green?logo=esp32&logoColor=white)](https://darkone83.github.io/x-sound.github.io/)
 
 Want to customize or build your own? Here's what you need:
 
