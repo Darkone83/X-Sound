@@ -8,6 +8,8 @@
   <img src="https://github.com/Darkone83/X-Sound/blob/main/images/X-Sound.jpg">
 </p>
 
+<a href="https://discord.gg/k2BQhSJ"><img src="https://github.com/Darkone83/ModXo-Basic/blob/main/Images/discord.svg"></a>
+
 # X-Sound
 
 Ever wanted an Xbox startup sound? X-Sound brings it to the OG XBOX, with a compact ESP32-S3 module that adds custom **boot** and **eject** sounds to your original Xbox. No more silent power-ups – now you get that nostalgic audio experience with modern web-based control.
