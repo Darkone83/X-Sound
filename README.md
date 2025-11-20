@@ -23,7 +23,7 @@ Built by **Darkone83 / Darkone Customs**.
 **Plays the sounds you remember**
 - Triggers `/boot.mp3` automatically when you power on
 - Plays `/eject.mp3` when you hit the eject button
-- Works with .mp3 files (98-128kbps, 44.1kHz mono, keep them under 30 seconds)
+- Works with .mp3 files (96-128kbps, 44.1kHz mono, keep them under 30 seconds)
 
 **Easy file management through your browser**
 - Upload, delete, and test audio files from any device on your network
