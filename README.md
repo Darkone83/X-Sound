@@ -108,7 +108,7 @@ Install these through the Arduino IDE Library Manager:
 
 Here's where to tap into your Xbox motherboard:
 
-**Ground (GND):** Any solid ground point works. The LPC header ground is convenient, or you can use the metal shielding or DVD connector ground.
+**Ground (GND):** Any solid ground point works. The LPC header ground is convenient, or the DVD connector ground.
 
 **5V:** Grab this from the LPC connector or the DVD power plug's 5V line.
 
